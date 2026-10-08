@@ -25,6 +25,10 @@ void WindowController::usagePagerItems(int cur, int total, int* slots) {
 }
 
 void WindowController::layoutUsagePager(const UsagePagerLayout& layout) {
+    pagerX_ = layoutPager(layout, IDC_BTN_PAGE_PREV, IDC_BTN_PAGE_NEXT, IDC_PAGER_SLOT0, pagerSlotPage_);
+}
+
+int WindowController::layoutPager(const UsagePagerLayout& layout, int prevId, int nextId, int slotId, int* slotPages) {
     const int width = layout.width, height = layout.height;
     // 分页条：‹ [槽×7] ›，条目数决定槽位横向排布
     int slots[7];
@@ -36,7 +40,7 @@ void WindowController::layoutUsagePager(const UsagePagerLayout& layout) {
     int count = items + arrows;
     int x = width - 40 - (count * btnW + (count - 1) * gap); // 右下角：右缘贴面板边距
     int y = pagerY(height);
-    pagerX_ = x;
+    const int startX = x;
     auto placeBtn = [&](int id, const wchar_t* text, int px, bool enable) {
         HWND b = GetDlgItem(layout.window, id);
         if (!b) return;
@@ -46,11 +50,11 @@ void WindowController::layoutUsagePager(const UsagePagerLayout& layout) {
         ShowWindow(b, layout.empty ? SW_HIDE : SW_SHOW);
         InvalidateRect(b, nullptr, FALSE); // 页码文字不变时，当前页高亮仍可能改变。
     };
-    placeBtn(IDC_BTN_PAGE_PREV, L"上一页", x, layout.page > 0);
+    placeBtn(prevId, L"上一页", x, layout.page > 0);
     x += btnW + gap;
     for (int i = 0; i < 7; ++i) {
-        int id = IDC_PAGER_SLOT0 + i;
-        pagerSlotPage_[i] = slots[i];
+        int id = slotId + i;
+        slotPages[i] = slots[i];
         if (slots[i] == 0) { ShowWindow(GetDlgItem(layout.window, id), SW_HIDE); continue; }
         wchar_t label[16]{};
         if (slots[i] == -1) swprintf(label, 16, L"…");
@@ -58,8 +62,9 @@ void WindowController::layoutUsagePager(const UsagePagerLayout& layout) {
         placeBtn(id, label, x, slots[i] != -1);
         x += btnW + gap;
     }
-    placeBtn(IDC_BTN_PAGE_NEXT, L"下一页", x, layout.hasMore);
+    placeBtn(nextId, L"下一页", x, layout.hasMore);
     InvalidateRect(layout.window, nullptr, FALSE);
+    return startX;
 }
 
 void WindowController::loadUsagePage(bool forcePaint) {

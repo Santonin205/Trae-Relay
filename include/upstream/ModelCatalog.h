@@ -26,6 +26,7 @@ public:
     // 启动唯一刷新线程：立即拉取，成功后 1 小时、失败后 5 分钟重试。
     void start();
     void stop();
+    void requestRefresh() { m_refreshRequested = true; m_wake.notify_all(); }
 
     static ModelCatalog& instance();
 
@@ -39,6 +40,7 @@ private:
     std::atomic<bool> m_everOk{false};
     std::atomic<int> m_version{0};
     bool m_attempted = false;
+    std::atomic<bool> m_refreshRequested{false};
     std::condition_variable_any m_wake;
     std::jthread m_worker;
 };

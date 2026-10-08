@@ -16,6 +16,14 @@ void sizeCombo(HWND hwnd) {
         std::max(1, itemHeight + height - static_cast<int>(client.bottom)));
 }
 constexpr CtrlDef kCtrlDefs[] = {
+    { IDC_NAV_CREDENTIALS, Ck::NavTab, FTab, PAGE_CREDENTIALS },
+    { IDC_CRED_DEFAULT, Ck::Check, FBody, PAGE_CREDENTIALS },
+    { IDC_CRED_WEB, Ck::Check, FBody, PAGE_CREDENTIALS },
+    { IDC_CRED_LOAD, Ck::Btn, FBody, PAGE_CREDENTIALS },
+    { IDC_CRED_LOGIN, Ck::PrimaryBtn, FBody, PAGE_CREDENTIALS },
+    { IDC_CRED_REFRESH, Ck::Btn, FBody, PAGE_CREDENTIALS },
+    { IDC_CRED_PREV, Ck::PagerBtn, FBody, PAGE_CREDENTIALS },
+    { IDC_CRED_NEXT, Ck::PagerBtn, FBody, PAGE_CREDENTIALS },
     { IDC_NAV_STATUS, Ck::NavTab, FTab, PAGE_STATUS },
     { IDC_NAV_USAGE, Ck::NavTab, FTab, PAGE_USAGE },
     { IDC_NAV_SETTINGS, Ck::NavTab, FTab, PAGE_SETTINGS },
@@ -56,6 +64,14 @@ constexpr CtrlDef kCtrlDefs[] = {
 }
 
 const CtrlDef* ctrlDef(int id) {
+    static const CtrlDef slot{IDC_CRED_SLOT0,Ck::PagerSlot,FBody,PAGE_CREDENTIALS};
+    if(id>=IDC_CRED_SLOT0 && id<IDC_CRED_SLOT0+7)return &slot;
+    static const CtrlDef name{IDC_CRED_NAME,Ck::Edit,FBody,PAGE_CREDENTIALS};
+    static const CtrlDef enable{IDC_CRED_ENABLE,Ck::Btn,FBody,PAGE_CREDENTIALS};
+    static const CtrlDef remove{IDC_CRED_DELETE,Ck::Btn,FBody,PAGE_CREDENTIALS};
+    if(id>=IDC_CRED_NAME && id<IDC_CRED_NAME+CRED_PAGE_SIZE)return &name;
+    if(id>=IDC_CRED_ENABLE && id<IDC_CRED_ENABLE+CRED_PAGE_SIZE)return &enable;
+    if(id>=IDC_CRED_DELETE && id<IDC_CRED_DELETE+CRED_PAGE_SIZE)return &remove;
     for (const auto& def : kCtrlDefs) if (def.id == id) return &def;
     return nullptr;
 }
@@ -157,12 +173,31 @@ void paintStatic(HWND hwnd, HDC destination) {
 void paintEdit(HWND hwnd, HDC destination) {
     RECT pixels{};
     GetClientRect(hwnd, &pixels);
-    Canvas canvas(hwnd, destination, pixels, C_SURFACE);
+    const int id=GetDlgCtrlID(hwnd);
+    const bool accountName=id>=IDC_CRED_NAME && id<IDC_CRED_NAME+CRED_PAGE_SIZE;
+    Canvas canvas(hwnd, destination, pixels, accountName && (id-IDC_CRED_NAME)%2 ? C_ROW_STRIPE : C_SURFACE);
+    if(accountName && GetFocus()!=hwnd){
+        canvas.text(windowText(hwnd),boundsFor(hwnd,pixels),FBody,IsWindowEnabled(hwnd)?C_TEXT:C_DISABLED_TEXT,{TextAlign::Center});
+        return;
+    }
     canvas.editText(hwnd);
 }
 
 LRESULT CALLBACK inputSubclass(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
     auto kind = static_cast<Ck>(data);
+    const int controlId = GetDlgCtrlID(hwnd);
+    if (kind == Ck::Edit && controlId >= IDC_CRED_NAME && controlId < IDC_CRED_NAME + CRED_PAGE_SIZE) {
+        if (msg == WM_GETDLGCODE && lp) {
+            const auto* key = reinterpret_cast<const MSG*>(lp);
+            if ((key->message == WM_KEYDOWN || key->message == WM_CHAR) && key->wParam == VK_RETURN)
+                return DefSubclassProc(hwnd, msg, wp, lp) | DLGC_WANTMESSAGE;
+        }
+        if (msg == WM_KEYDOWN && wp == VK_RETURN) {
+            SetFocus(GetParent(hwnd)); // EN_KILLFOCUS saves the edited account name.
+            return 0;
+        }
+        if (msg == WM_CHAR && wp == VK_RETURN) return 0;
+    }
     if (msg == WM_NCDESTROY) {
         releaseSurface(hwnd);
         RemoveWindowSubclass(hwnd, inputSubclass, id);
@@ -286,7 +321,7 @@ void drawOwnerButton(const DRAWITEMSTRUCT* item, ButtonState state) {
     canvas.roundRect(box, current ? ButtonMetrics::selectedPageCorner : ButtonMetrics::corner, background, border);
     if (kind == Ck::PagerBtn) {
         const float cx = box.x + box.w * 0.5f, cy = box.y + box.h * 0.5f;
-        const float direction = def->id == IDC_BTN_PAGE_PREV ? -1.f : 1.f;
+        const float direction = (def->id == IDC_BTN_PAGE_PREV || def->id == IDC_CRED_PREV) ? -1.f : 1.f;
         const Point arrow[] = {
             {cx - direction * 3, cy - 6},
             {cx + direction * 3, cy},

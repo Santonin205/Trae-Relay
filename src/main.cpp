@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
     LOG_I("生效版本头: %s / %s", cfg.ideVersion.c_str(), cfg.ideVersionCode.c_str());
 
     // 账号发现
-    if (cfg.accountsAutoDiscover) AccountPool::instance().autoDiscover();
+    AccountPool::instance().autoDiscover();
     ModelCatalog::instance().start();
 
     if (serveHeadless) {

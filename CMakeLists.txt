@@ -40,6 +40,9 @@ set(TRAE_SOURCES
     ${SRC}/api/ResponsesApi.cpp
     ${SRC}/accounts/AccountPool.cpp
     ${SRC}/accounts/Storage.cpp
+    ${SRC}/accounts/Credentials.cpp
+    ${SRC}/accounts/WebLogin.cpp
+    ${SRC}/window/CredentialsPage.cpp
     ${SRC}/accounts/TokenRefresh.cpp
     ${SRC}/upstream/ModelCatalog.cpp
     ${SRC}/upstream/Upstream.cpp

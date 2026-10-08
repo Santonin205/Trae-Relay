@@ -9,6 +9,7 @@
 
 http::Headers ideHeaders(const Account& acc, const std::string& ideVersion,
                          const std::string& ideVersionCode, bool sse, const char* appId) {
+    std::lock_guard<std::recursive_mutex> lock(acc.refreshMtx);
     http::Headers h;
     h.set("Content-Type", "application/json");
     h.set("Authorization", "Cloud-IDE-JWT " + acc.auth.accessToken);

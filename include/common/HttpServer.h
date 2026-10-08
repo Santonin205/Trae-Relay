@@ -37,9 +37,11 @@ class HttpServer {
 public:
     HttpHandler handler;
     bool start(const std::string& host, int port, std::string& err);
+    int port() const { return m_port; }
     void stop();
     ~HttpServer() { stop(); }
 
 private:
     void* m_impl = nullptr;
+    int m_port = 0;
 };

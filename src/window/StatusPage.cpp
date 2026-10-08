@@ -45,16 +45,17 @@ void WindowController::paintStatusPage(Canvas& dc, int width, int) {
     paintPanel(dc, acct.x, acct.y, acct.w, acct.h);
     paintGroupLabel(dc, 60, 94, L"当前账号");
     auto& pool = AccountPool::instance();
-    if (pool.accounts().empty()) {
-        drawText(dc, L"未发现已登录的 Trae 账号",
+    auto accounts = pool.accounts();
+    if (accounts.empty()) {
+        drawText(dc, L"未启用账号",
                  { 60, 124, width - 120, 30 }, FMetric, C_TEXT,
                  DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        drawText(dc, L"请先在 Trae 客户端完成登录，再回到本页查看",
+        drawText(dc, L"请在凭据管理中加载默认目录或网页登录，并启用一个账号",
                  { 60, 172, width - 120, 26 }, FSmall, C_MUTED,
                  DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     } else {
-        auto& account = pool.accounts().front();
-        std::wstring nickname = toWide(account->nickname);
+        auto account = accounts.front();
+        std::wstring nickname = toWide(credentials::displayName(*account));
         if (nickname.empty()) nickname = L"未命名账号";
         drawText(dc, nickname, { 60, 120, width - 360, 32 }, FMetricSemibold, C_TEXT,
                  DT_LEFT | DT_SINGLELINE | DT_VCENTER);
@@ -222,15 +223,16 @@ void WindowController::refreshStatusPage(HWND) {
     if (!pageStatus_) return;
     HWND urlEdit = GetDlgItem(pageStatus_, IDC_ED_BASEURL);
     if (urlEdit) setControlText(urlEdit, baseUrlText().c_str());
-    bool hasAccount = !AccountPool::instance().accounts().empty();
+    auto accounts = AccountPool::instance().accounts();
+    bool hasAccount = !accounts.empty();
     enableControl(GetDlgItem(pageStatus_, IDC_BTN_CREDITS), hasAccount);
     enableControl(GetDlgItem(pageStatus_, IDC_BTN_CHECKIN),
                  hasAccount && !checkinRunning_.load());
     // 比较账号卡真正显示的值；余额小数位、请求状态及跨日请求数均纳入。
     CardState current;
     if (hasAccount) {
-        const auto& account = AccountPool::instance().accounts().front();
-        current.nickname = toWide(account->nickname);
+        auto account = accounts.front();
+        current.nickname = toWide(credentials::displayName(*account));
         current.state = account->queued.load() > 0 ? 4 : account->active.load() > 0 ? 2 : 3;
         double amount = account->credits.load();
         wchar_t amountText[64]{};

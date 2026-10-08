@@ -8,6 +8,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <functional>
 #include "common/Json.h"
 #include "accounts/Storage.h"
 
@@ -25,7 +26,11 @@ struct Account {
     std::atomic<int> queued{ 0 };            // 当前上游排队会话数
     std::atomic<long long> lastUsedTs{ 0 };
     std::atomic<long long> lastRequestTs{ 0 };
-    std::mutex refreshMtx;                   // 令牌刷新串行化
+    mutable std::recursive_mutex refreshMtx; // 令牌刷新串行化
+    std::atomic<long long> creditsUpdated{0};
+    std::atomic<long long> creditsCheckedAt{0};
+    std::atomic<bool> retired{false};
+    bool credentialDirty = false; // guarded by refreshMtx
     std::mutex gateMtx;
     std::condition_variable gateCv;
 
@@ -64,7 +69,10 @@ class AccountPool {
 public:
     // 自动发现 + 解密全部账号
     void autoDiscover();
-    std::vector<std::shared_ptr<Account>>& accounts() { return m_accounts; }
+    std::vector<std::shared_ptr<Account>> accounts() {
+        std::lock_guard<std::mutex> lock(m_mtx); return m_accounts;
+    }
+    bool replaceActive(std::shared_ptr<Account> account, std::function<void()> commit = {});
 
     // Whether any account credentials were discovered.
     bool hasUsableAccount() {

@@ -16,6 +16,10 @@ struct TraeEdition {
 };
 
 struct AuthData {
+    std::string credentialId;
+    std::string credentialGeneration;
+    std::string devicePrivateBlob; // CNG P-256 private blob; persisted only under DPAPI
+    Json deviceInfo;
     std::string accessToken;   // token
     std::string refreshToken;
     std::string userId;

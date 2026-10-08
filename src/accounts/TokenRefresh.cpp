@@ -56,7 +56,7 @@ RefreshResult exchangeToken(const AuthData& auth) {
         return rr;
     }
     if (resp.status != 200) {
-        rr.error = "HTTP " + std::to_string(resp.status) + ": " + resp.body.substr(0, 300);
+        rr.error = "HTTP " + std::to_string(resp.status);
         return rr;
     }
     Json j;
@@ -73,7 +73,7 @@ RefreshResult exchangeToken(const AuthData& auth) {
             bool hasCode = code && !code->isNull();
             const Json* msg = e->find("Message");
             if (hasCode || (msg && !msg->isNull())) {
-                rr.error = "上游错误: " + e->dump().substr(0, 300);
+                rr.error = "上游拒绝刷新，请重新登录";
                 return rr;
             }
         }

@@ -146,7 +146,7 @@ void handleConnection(ConnImpl& c) {
         std::string line;
         if (!readLineSock(c, line, 120000)) break; // 空闲 120s 断开
         if (line.empty()) { continue; }
-        LOG_D("hsrv: request line=%s", line.c_str());
+        LOG_D("hsrv: request line=%s", (line.find("/authorize?") == std::string::npos ? line : std::string("GET /authorize [redacted]")).c_str());
         HttpRequest req;
         size_t sp1 = line.find(' ');
         size_t sp2 = line.find(' ', sp1 + 1);
@@ -362,6 +362,8 @@ bool HttpServer::start(const std::string& host, int port, std::string& err) {
         closesocket(impl->listen);
         return false;
     }
+    int addressSize = sizeof(addr);
+    if (getsockname(impl->listen, (sockaddr*)&addr, &addressSize) == 0) m_port = ntohs(addr.sin_port);
     impl->running = true;
     // m_impl 持有 shared_ptr（cpp 内部以 new shared_ptr 存放，头文件保持 void*）
     m_impl = new std::shared_ptr<ServerImpl>(impl);

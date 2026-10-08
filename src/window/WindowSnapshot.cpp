@@ -9,6 +9,7 @@ const wchar_t* WindowController::pageName(int page) {
     switch (page) {
     case PAGE_STATUS: return L"status";
     case PAGE_SETTINGS: return L"settings";
+    case PAGE_CREDENTIALS: return L"credentials";
     default: return L"usage";
     }
 }
@@ -70,7 +71,7 @@ int WindowController::runSnapshot(const std::string& dirUtf8) {
     HGDIOBJ oldBmp = SelectObject(mem, bmp);
     bool savedAll = true;
     int top = s(hwnd, TOPBAR_H);
-    for (int page : { PAGE_STATUS, PAGE_USAGE, PAGE_SETTINGS }) {
+    for (int page : { PAGE_STATUS, PAGE_USAGE, PAGE_SETTINGS, PAGE_CREDENTIALS }) {
         setPage(page);
         HWND ph = pageHwnd(page);
         if (page == PAGE_USAGE) loadUsagePage();

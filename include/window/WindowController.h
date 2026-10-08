@@ -1,6 +1,7 @@
 #pragma once
 #include "ui/UiControls.h"
 #include "accounts/AccountPool.h"
+#include "accounts/Credentials.h"
 #include "upstream/ModelCatalog.h"
 #include <atomic>
 #include <map>
@@ -35,6 +36,18 @@ private:
     HWND pageStatus_ = nullptr;
     HWND pageSettings_ = nullptr;
     HWND pageUsage_ = nullptr;
+    HWND pageCredentials_ = nullptr, navCredentials_ = nullptr;
+    int credentialPage_ = 0;
+    int credentialPagerX_ = 0, credentialSlotPage_[7] = {};
+    std::vector<CredentialRow> credentialRows_;
+    std::string credentialMessage_;
+    std::atomic<bool> credentialWorking_{false};
+    std::jthread credentialWorker_;
+    void createCredentialsControls();
+    void layoutCredentialsPage();
+    void paintCredentialsPage(visual::Canvas& dc,int width,int height);
+    void refreshCredentialsPage();
+    bool credentialCommand(int id,int code,HWND control);
     HWND navStatus_ = nullptr;
     HWND navSettings_ = nullptr;
     HWND navUsage_ = nullptr;
@@ -136,6 +149,7 @@ private:
     void applySettingsInstant(HWND hwnd);
     void usagePagerItems(int cur, int total, int* slots);
     void layoutUsagePager(const UsagePagerLayout& layout);
+    int layoutPager(const UsagePagerLayout& layout, int prevId, int nextId, int slotId, int* slotPages);
     void loadUsagePage(bool forcePaint = true);
     void scrollUsageTo(int position);
     void layoutUsagePage();

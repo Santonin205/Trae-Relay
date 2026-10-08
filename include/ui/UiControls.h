@@ -39,7 +39,14 @@ inline constexpr int IDC_CHK_CHECKIN = 1306;
 inline constexpr int IDC_ED_HOUR = 1307;
 inline constexpr int IDC_CHK_LOGGING = 1308;
 inline constexpr int IDC_ED_MINUTE = 1311;
-enum PageIndex { PAGE_STATUS = 0, PAGE_USAGE, PAGE_SETTINGS };
+inline constexpr int IDC_NAV_CREDENTIALS = 1005;
+inline constexpr int IDC_CRED_DEFAULT = 1500, IDC_CRED_WEB = 1501;
+inline constexpr int IDC_CRED_LOAD = 1502, IDC_CRED_LOGIN = 1503, IDC_CRED_REFRESH = 1504;
+inline constexpr int IDC_CRED_PREV = 1505, IDC_CRED_NEXT = 1506;
+inline constexpr int IDC_CRED_SLOT0 = 1510;
+inline constexpr int IDC_CRED_NAME = 3000, IDC_CRED_ENABLE = 3100, IDC_CRED_DELETE = 3200;
+inline constexpr int CRED_PAGE_SIZE = 4;
+enum PageIndex { PAGE_STATUS = 0, PAGE_USAGE, PAGE_SETTINGS, PAGE_CREDENTIALS };
 
 // ===== 控件描述表 =====
 // 每个控件在此登记身份、字体、所属页及字段外框。

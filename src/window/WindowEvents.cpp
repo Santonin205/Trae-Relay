@@ -195,8 +195,9 @@ LRESULT WindowController::handleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                 else if (def->kind == Ck::EffortBtn) state.selected = effortFromId(id) == effort_;
                 else if (def->kind == Ck::Check) state.checked = isChecked(id);
                 else if (def->kind == Ck::PagerSlot) {
-                    int page = pagerSlotPage_[id - IDC_PAGER_SLOT0];
-                    state.selected = page > 0 && page - 1 == usagePageIdx_;
+                    const bool credential = def->page == PAGE_CREDENTIALS;
+                    int page = credential ? credentialSlotPage_[id - IDC_CRED_SLOT0] : pagerSlotPage_[id - IDC_PAGER_SLOT0];
+                    state.selected = page > 0 && page - 1 == (credential ? credentialPage_ : usagePageIdx_);
                 }
             }
             drawOwnerButton(draw, state);
@@ -212,6 +213,7 @@ LRESULT WindowController::handleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         int id = LOWORD(wp);
         int code = HIWORD(wp);
         const CtrlDef* def = ctrlDef(id);
+        if (credentialCommand(id,code,reinterpret_cast<HWND>(lp))) return 0;
         if (def && def->kind == Ck::NavTab && code == BN_CLICKED) setPage(def->page);
         else if (id == IDC_BTN_PAGE_PREV && code == BN_CLICKED) {
             if (usagePageIdx_ > 0) { usagePageIdx_--; usageScroll_ = 0; loadUsagePage(); }

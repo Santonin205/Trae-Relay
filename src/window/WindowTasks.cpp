@@ -65,6 +65,7 @@ void WindowController::tickSecond(HWND hwnd) {
     // 使用记录页：每 2s 重读当前分页，积分落账后行内数字自动出现
     if (visible && activePage_ == PAGE_USAGE && pageUsage_ && (tick % 2 == 0))
         loadUsagePage(false);
+    if(visible && activePage_ == PAGE_CREDENTIALS) refreshCredentialsPage();
     tickAutoCheckin(hwnd);
 }
 

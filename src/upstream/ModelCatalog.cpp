@@ -519,10 +519,11 @@ void ModelCatalog::start() {
             bool ok = false;
             auto& pool = AccountPool::instance();
             // 元数据请求不占聊天并发槽，避免首个聊天等待目录时互相阻塞。
-            if (pool.accounts().empty()) {
+            auto accounts = pool.accounts();
+            if (accounts.empty()) {
                 err = "未发现可用账号";
             } else {
-                auto acc = pool.accounts().front();
+                auto acc = accounts.front();
                 pool.ensureFreshToken(*acc);
                 ok = refreshOnce(*acc, err);
             }
@@ -531,7 +532,8 @@ void ModelCatalog::start() {
             m_cacheErr = err;
             m_attempted = true;
             m_wake.notify_all();
-            m_wake.wait_for(lk, stop, std::chrono::seconds(ok ? 3600 : 300), [] { return false; });
+            m_wake.wait_for(lk, stop, std::chrono::seconds(ok ? 3600 : 300), [this] { return m_refreshRequested.load(); });
+            m_refreshRequested = false;
         }
     });
 }

@@ -1,5 +1,6 @@
 // AccountPool.cpp
 #include "accounts/AccountPool.h"
+#include "accounts/Credentials.h"
 #include "common/Crypto.h"
 #include "common/Http.h"
 #include "common/Log.h"
@@ -17,34 +18,18 @@ AccountPool& AccountPool::instance() {
 }
 
 void AccountPool::autoDiscover() {
+    credentials::initialize();
+}
+
+bool AccountPool::replaceActive(std::shared_ptr<Account> account, std::function<void()> commit) {
     std::lock_guard<std::mutex> lk(m_mtx);
-    if (m_count.load() > 0) return;
-    auto editions = Storage::discoverEditions();
-    for (auto& ed : editions) {
-        auto acc = std::make_shared<Account>();
-        std::string err;
-        if (!Storage::readAuth(ed.userDir, acc->auth, err)) {
-            LOG_W("账号读取失败 [%s]: %s", ed.label.c_str(), err.c_str());
-            continue;
-        }
-        acc->machineId = Storage::readMachineId(ed.userDir);
-        // x-device-id 优先用 AHA/TTNet 注册设备 ID（发积分类接口按它校验设备），
-        // 读不到再退回 machineid/devDeviceId 兜底。
-        acc->deviceId = Storage::readAhaDeviceId(ed.userDir);
-        if (acc->deviceId.empty()) acc->deviceId = Storage::readDeviceId(ed.userDir);
-        acc->editionId = ed.id;
-        acc->nickname = "Trae-" + (acc->auth.userId.size() > 4 ? acc->auth.userId.substr(acc->auth.userId.size() - 4) : acc->auth.userId);
-        if (acc->machineId.empty())
-            acc->machineId = crypto::sha512Hex(acc->auth.userId + acc->auth.accessToken).substr(0, 32);
-        if (acc->deviceId.empty()) acc->deviceId = acc->machineId;
-        LOG_I("发现账号 %s（%s）token=%s", acc->nickname.c_str(), ed.label.c_str(),
-              logRedact(acc->auth.accessToken).c_str());
-        m_accounts.push_back(acc);
-        m_count.store((int)m_accounts.size());
-    }
-    if (m_count.load() == 0) {
-        LOG_E("未发现任何可用账号：请确认 Trae CN 已登录（%%APPDATA%%\\Trae CN）");
-    }
+    for (auto& current : m_accounts) if (current->active.load() > 0) return false;
+    if (commit) commit();
+    for (auto& current : m_accounts) if(current != account) current->retired = true;
+    m_accounts.clear();
+    if (account) m_accounts.push_back(account);
+    m_count.store((int)m_accounts.size());
+    return true;
 }
 
 std::shared_ptr<Account> AccountPool::acquire(int timeoutMs) {
@@ -81,7 +66,8 @@ std::shared_ptr<Account> AccountPool::acquire(int timeoutMs) {
                     }
                 }
             }
-            if (picked->tryAcquireSlot(maxC)) {
+            std::lock_guard<std::mutex> lock(m_mtx);
+            if (!m_accounts.empty() && picked == m_accounts.front() && picked->tryAcquireSlot(maxC)) {
                 picked->lastRequestTs.store((long long)time(nullptr) * 1000);
                 return picked;
             }
@@ -99,11 +85,28 @@ void AccountPool::release(std::shared_ptr<Account> acc, bool ok, int errorCode) 
 }
 
 bool AccountPool::ensureFreshToken(Account& acc) {
-    std::lock_guard<std::mutex> lk(acc.refreshMtx);
+    std::lock_guard<std::recursive_mutex> lk(acc.refreshMtx);
+    if (acc.retired.load()) return false;
+    if (acc.credentialDirty) {
+        std::string error;
+        if (!credentials::persist(acc, error)) return false;
+        acc.credentialDirty = false;
+    }
     long long now = (long long)time(nullptr);
     if (!token::needsRefresh(acc.auth, now)) {
         // 未知过期时间且从未验证过：尝试刷新一次（fail-safe）
         if (acc.auth.expiredTs != 0) return true;
+    }
+    if (!acc.auth.devicePrivateBlob.empty()) {
+        std::string error;
+        if (!credentials::refreshWeb(acc.auth, error)) {
+            LOG_W("网页登录凭据刷新失败: %s", error.c_str());
+            return acc.auth.expiredTs > now;
+        }
+        acc.credentialDirty = true;
+        if (!credentials::persist(acc, error)) return false;
+        acc.credentialDirty = false;
+        return true;
     }
     auto rr = token::exchangeToken(acc.auth);
     if (!rr.ok) {
@@ -111,6 +114,10 @@ bool AccountPool::ensureFreshToken(Account& acc) {
         return acc.auth.expiredTs == 0 || acc.auth.expiredTs > now; // 刷新失败但旧 token 可能仍有效
     }
     acc.auth = rr.auth;
+    std::string error;
+    acc.credentialDirty = true;
+    if (!credentials::persist(acc, error)) return false;
+    acc.credentialDirty = false;
     return true;
 }
 
@@ -314,6 +321,8 @@ void AccountPool::refreshCredits(Account* acc) {
         if (!Json::parse(resp.body, j)) continue;
         double credits = -1;
         if (findUsageSummaryDeep(j, credits) || findCreditsEventDeep(j, credits) || findCreditsFromPacks(j, credits)) {
+            a->creditsUpdated.fetch_add(1);
+            a->creditsCheckedAt.store((long long)time(nullptr));
             double old = a->credits.exchange(credits);
             LOG_I("账号 %s 积分: %.1f（原 %.1f）", a->nickname.c_str(), credits, old);
             // 使用记录落账：弹出该账号最老一条待结请求，差值=回填前-回填后

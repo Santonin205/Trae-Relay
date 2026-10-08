@@ -11,6 +11,8 @@ WindowController::WindowController()
 }
 
 WindowController::~WindowController() {
+    credentials::stopLogin();
+    if(credentialWorker_.joinable())credentialWorker_.join();
     startupWorker_.request_stop();
     creditsWorker_.request_stop();
     checkinWorker_.request_stop();
@@ -60,6 +62,7 @@ HWND WindowController::pageHwnd(int page) {
     switch (page) {
     case PAGE_STATUS: return pageStatus_;
     case PAGE_SETTINGS: return pageSettings_;
+    case PAGE_CREDENTIALS: return pageCredentials_;
     default: return pageUsage_;
     }
 }

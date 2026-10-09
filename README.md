@@ -154,4 +154,3 @@ README.md               项目说明
 | `usage/` | 使用记录 |
 | `responses_sessions.json` | 开启持久化后的会话缓存 |
 
-发布时只需分发 EXE 和 README；不要上传自己的配置、日志、会话缓存或账号资料。

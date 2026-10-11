@@ -186,7 +186,8 @@ void WindowController::loadModelSelection(HWND) {
     const ModelConfig* model = cfg.modelConfig(modelName);
     std::string effort = model && !model->reasoningEffort.empty() ? model->reasoningEffort
                                                                   : cfg.defaultReasoningEffort;
-    effort_ = effort == "low" ? EffortLow
+    // nativeEffortFor 会按模型能力保存 light 或 low，两者均回显为低档。
+    effort_ = (effort == "light" || effort == "low") ? EffortLow
                : effort == "extra_high" ? EffortXHigh
                                                                : EffortHigh;
     for (int id : { IDC_BTN_EFF0, IDC_BTN_EFF1, IDC_BTN_EFF2 })

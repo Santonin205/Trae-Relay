@@ -1,7 +1,5 @@
 ﻿# Trae Relay
 
-当前版本：`0.14`
-
 Windows 原生的 Trae 本地 API 转接工具，支持通过网页登录或读取本地 Trae 登录凭据，将 Trae 账号提供为 OpenAI 兼容接口。单个 EXE 即可运行，无需 Python、Node.js 或 Docker。
 
 目前主要验证 Traecode CN，Trae Work 请自行测试，国际版大概率用不了。

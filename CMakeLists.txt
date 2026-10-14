@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(TraeRelay VERSION 0.15.0 LANGUAGES CXX)
+project(TraeRelay VERSION 0.16.0 LANGUAGES CXX)
 
 set(SRC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(INC ${CMAKE_CURRENT_SOURCE_DIR}/include)

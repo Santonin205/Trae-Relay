@@ -125,7 +125,7 @@ void WindowController::layoutStatusPage() {
 
 std::wstring WindowController::baseUrlText() {
     auto& cfg = Config::instance();
-    return L"http://" + toWide(cfg.serviceHost) + L":" + std::to_wstring(cfg.servicePort);
+    return L"http://" + toWide(cfg.serviceHost) + L":" + std::to_wstring(cfg.servicePort) + L"/v1";
 }
 
 void WindowController::createStatusControls() {

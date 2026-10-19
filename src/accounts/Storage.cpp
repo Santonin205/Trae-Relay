@@ -1,5 +1,6 @@
 // Storage.cpp - storage.json 双格式兼容 + tc 解密（CNG）
 #include "accounts/Storage.h"
+#include "accounts/Saas.h"
 #include "common/Crypto.h"
 #include "common/Log.h"
 #include <windows.h>
@@ -387,6 +388,8 @@ bool Storage::readAuth(const std::string& userDir, AuthData& out, std::string& e
     out.host = firstStr(auth, { "host", "Host" });
     out.clientId = firstStr(auth, { "clientID", "ClientID", "clientId" });
     fillPsd(out, auth);
+    try { saas::restoreIdentity(out); }
+    catch (const std::exception& e) { err = e.what(); return false; }
     if (out.accessToken.empty()) {
         err = "解密结果中没有 token 字段";
         return false;

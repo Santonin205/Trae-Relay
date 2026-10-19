@@ -27,6 +27,8 @@ struct AuthData {
     long long expiredTs = 0;   // 归一为秒级时间戳；0 = 未知
     std::string host;          // 账号绑定的 API host（可能为空）
     std::string clientId;
+    std::string tenantId, tenantName, loginScope;
+    bool isSaas() const { return scope == "saas" && (loginScope.empty() || loginScope == "saas"); }
     // psd (providerSpecificData) 常用字段
     std::string webId, bizUserId, userUniqueId, scope, tenant, region, aiRegion,
         appLanguage, appVersion, userRegion, userIdentity;

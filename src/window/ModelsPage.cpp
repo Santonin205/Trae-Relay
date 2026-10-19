@@ -68,6 +68,8 @@ bool WindowController::refreshModelSettings(HWND) {
     if (!combo) return false;
     auto& catalog = ModelCatalog::instance();
     if (!catalog.ready()) {
+        ComboBox_ResetContent(combo);
+        modelCatalogNames_.clear(); modelCatalogCaps_.clear();
         // 目录从未拉取成功：下拉给占位提示，后台异步拉取（绝不阻塞 UI 线程）
         if (ComboBox_GetCount(combo) == 0) {
             setControlText(GetDlgItem(pageStatus_, IDC_ST_MODELHINT), L"模型目录加载中…");
@@ -80,10 +82,12 @@ bool WindowController::refreshModelSettings(HWND) {
     // 实时拼好全部标签（会员身份/闲时窗口/目录任一变化都要翻新），与现有下拉逐项
     // 比对，完全一致就不动控件——不打扰展开中的下拉，也让倍率跨过时间窗后自动刷新。
     int identity = AccountPool::instance().payIdentityForDisplay();
+    auto accounts = AccountPool::instance().accounts();
+    bool enterprise = !accounts.empty() && accounts.front()->auth.isSaas();
     std::vector<std::wstring> labels;
     labels.reserve(models.size());
     for (auto& model : models)
-        labels.push_back(toWide(model.configName) + modelRateLabel(modelRateView(model, identity)));
+        labels.push_back(toWide(model.configName) + (enterprise ? L"" : modelRateLabel(modelRateView(model, identity))));
     bool same = ComboBox_GetCount(combo) == (int)labels.size();
     if (same) {
         wchar_t buf[512]{};

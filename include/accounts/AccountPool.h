@@ -20,6 +20,8 @@ struct Account {
     std::string deviceId;
     std::string editionId;     // cn / solo / sg
     std::string nickname;
+    mutable std::mutex usageMtx;
+    Json enterpriseUsage = Json::object(); // CNY quota/usage, separate from personal credits
     std::atomic<double> credits{ -1 };       // -1 = 未知
     std::atomic<int> payIdentity{ -1 };      // ide_user_pay_status.user_pay_identity：-1 未知，0=Free，>0 付费档
     std::atomic<int> active{ 0 };            // 当前并发会话数
@@ -60,6 +62,7 @@ struct UsageRecord {
     long long in = 0, out = 0, cache = 0;    // token 数（来自上游 token_usage）
     double creditsBefore = 0, creditsAfter = 0, creditsDelta = 0;
     bool creditsKnown = false;               // false = 积分未回填（显示 "--"）
+    bool enterprise = false;                 // account totals are not per-request costs
     bool merged = false;                     // true = 差值为多条并发合计
     int ms = 0;                              // 上游耗时
     bool ok = true;

@@ -359,14 +359,32 @@ static void mergeCaps(ModelCaps& dst, const ModelCaps& src) {
     if (dst.offPeakWindows.empty() && !src.offPeakWindows.empty()) dst.offPeakWindows = src.offPeakWindows;
 }
 
-std::vector<ModelCaps> ModelCatalog::all(Account&, std::string& err) {
+static std::string catalogAccountKey(const Account& a) {
+    return a.auth.credentialId + "|" + a.auth.credentialGeneration + "|" + a.auth.userId + "|" + a.auth.tenantId;
+}
+
+void ModelCatalog::requestRefresh() {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    ++m_generation;
+    m_cache.clear(); m_accountKey.clear(); m_cacheErr.clear();
+    m_attempted = false; m_everOk = false; m_refreshRequested = true;
+    m_version.fetch_add(1); m_wake.notify_all();
+}
+
+std::vector<ModelCaps> ModelCatalog::all(Account& acc, std::string& err) {
     std::unique_lock<std::mutex> lk(m_mtx);
     m_wake.wait(lk, [this] { return m_attempted; });
     err = m_cacheErr;
+    if (acc.retired || m_accountKey != catalogAccountKey(acc)) {
+        err = "当前账号的模型目录尚未就绪";
+        return {};
+    }
     return m_cache;
 }
 
 bool ModelCatalog::refreshOnce(Account& acc, std::string& err) {
+    unsigned long long generation;
+    { std::lock_guard<std::mutex> lk(m_mtx); generation = m_generation; }
     auto cfg = settings::get();
     std::vector<ModelCaps> merged;
 
@@ -376,6 +394,8 @@ bool ModelCatalog::refreshOnce(Account& acc, std::string& err) {
     bool primaryCatalogOk = false;
     bool allCatalogsOk = true;
     http::Headers hd = ideHeaders(acc, cfg->ideVersion, cfg->ideVersionCode, false);
+    std::string host;
+    { std::lock_guard lock(acc.refreshMtx); host = acc.auth.isSaas() ? acc.auth.host : "https://trae-api-cn.mchost.guru"; }
     auto loadDetailCatalog = [&](const char* functionName) {
         Json body = Json::object();
         body.set("function", Json(functionName));
@@ -385,7 +405,7 @@ bool ModelCatalog::refreshOnce(Account& acc, std::string& err) {
         body.set("poly_prompt", Json(true));
         body.set("mode_type", Json(nullptr));
         body.set("agent_type", Json(nullptr));
-        auto resp = http::send("POST", "https://trae-api-cn.mchost.guru/api/ide/v1/get_detail_param",
+        auto resp = http::send("POST", host + "/api/ide/v1/get_detail_param",
                                 hd, body.dump(), 30000);
         if (!resp.ok()) {
             allCatalogsOk = false;
@@ -497,11 +517,13 @@ bool ModelCatalog::refreshOnce(Account& acc, std::string& err) {
     int modelCount = (int)merged.size();
     {
         std::lock_guard<std::mutex> lk(m_mtx);
+        if (acc.retired || generation != m_generation) { err = "账号已切换"; return false; }
         m_cache = std::move(merged);
+        m_accountKey = catalogAccountKey(acc);
         m_cacheErr.clear();
+        m_everOk.store(true);
+        m_version.fetch_add(1);
     }
-    m_everOk.store(true);
-    m_version.fetch_add(1);
     LOG_I("模型表已刷新：%d 个模型", modelCount);
     return true;
 }
@@ -515,6 +537,8 @@ void ModelCatalog::start() {
     if (m_worker.joinable()) return;
     m_worker = std::jthread([this](std::stop_token stop) {
         while (!stop.stop_requested()) {
+            unsigned long long generation;
+            { std::lock_guard<std::mutex> lk(m_mtx); generation = m_generation; m_refreshRequested = false; }
             std::string err;
             bool ok = false;
             auto& pool = AccountPool::instance();
@@ -524,11 +548,12 @@ void ModelCatalog::start() {
                 err = "未发现可用账号";
             } else {
                 auto acc = accounts.front();
-                pool.ensureFreshToken(*acc);
-                ok = refreshOnce(*acc, err);
+                if (pool.ensureFreshToken(*acc)) ok = refreshOnce(*acc, err);
+                else err = "账号凭据刷新失败";
             }
             if (!ok) LOG_W("模型表刷新失败：%s；5 分钟后重试", err.c_str());
             std::unique_lock<std::mutex> lk(m_mtx);
+            if (generation != m_generation) continue;
             m_cacheErr = err;
             m_attempted = true;
             m_wake.notify_all();

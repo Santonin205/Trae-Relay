@@ -42,6 +42,7 @@ set(TRAE_SOURCES
     ${SRC}/accounts/Storage.cpp
     ${SRC}/accounts/Credentials.cpp
     ${SRC}/accounts/WebLogin.cpp
+    ${SRC}/accounts/Saas.cpp
     ${SRC}/window/CredentialsPage.cpp
     ${SRC}/accounts/TokenRefresh.cpp
     ${SRC}/upstream/ModelCatalog.cpp

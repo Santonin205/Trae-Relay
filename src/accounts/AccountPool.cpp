@@ -6,6 +6,7 @@
 #include "common/Log.h"
 #include "common/Settings.h"
 #include "accounts/TokenRefresh.h"
+#include "accounts/Saas.h"
 #include "upstream/Upstream.h"
 #include <windows.h>
 #include <algorithm>
@@ -96,6 +97,13 @@ bool AccountPool::ensureFreshToken(Account& acc) {
     if (!token::needsRefresh(acc.auth, now)) {
         // 未知过期时间且从未验证过：尝试刷新一次（fail-safe）
         if (acc.auth.expiredTs != 0) return true;
+    }
+    if (acc.auth.isSaas()) {
+        try { saas::refreshToken(acc.auth); }
+        catch (const std::exception& e) { LOG_W("企业凭据刷新失败: %s", e.what()); return acc.auth.expiredTs > now; }
+        std::string error; acc.credentialDirty = true;
+        if (!credentials::persist(acc, error)) return false;
+        acc.credentialDirty = false; return true;
     }
     if (!acc.auth.devicePrivateBlob.empty()) {
         std::string error;
@@ -300,6 +308,15 @@ void AccountPool::refreshCredits(Account* acc) {
     }
     for (auto& a : targets) {
         if (!ensureFreshToken(*a)) continue;
+        if (a->auth.isSaas()) {
+            try { saas::refreshUsage(*a); }
+            catch (const std::exception& e) {
+                LOG_W("企业用量查询失败: %s", e.what());
+                std::lock_guard usageLock(a->usageMtx);
+                a->enterpriseUsage.set("error", e.what());
+            }
+            continue;
+        }
         refreshPayIdentity(a.get());
         std::string host = "https://api.trae.cn";
         if (!a->auth.host.empty() && a->auth.host.find("http") == 0) host = a->auth.host;
@@ -406,6 +423,7 @@ void AccountPool::refreshCreditsAsync(std::shared_ptr<Account> acc) {
 }
 
 bool AccountPool::updateCreditsFromEvent(Account& acc, const Json& event) {
+    if (acc.auth.isSaas()) return false;
     double credits = -1;
     if (findUsageSummaryDeep(event, credits) || findCreditsEventDeep(event, credits)) {
         double old = acc.credits.exchange(credits);
@@ -457,12 +475,12 @@ static void usageAppendLine(const UsageRecord& r) {
                      "{\"ts\":\"%s\",\"account\":\"%s\",\"model\":\"%s\",\"ep\":\"%s\","
                      "\"in\":%lld,\"out\":%lld,"
                      "\"cache\":%lld,\"before\":%.2f,\"after\":%.2f,\"delta\":%.4f,"
-                     "\"known\":%s,\"merged\":%s,\"ms\":%d,\"ok\":%s}\n",
+                     "\"known\":%s,\"merged\":%s,\"ms\":%d,\"ok\":%s,\"enterprise\":%s}\n",
                      tsbuf, usageJsonEscape(r.account).c_str(), usageJsonEscape(r.model).c_str(),
                      usageJsonEscape(r.endpoint).c_str(),
                      r.in, r.out, r.cache, r.creditsBefore, r.creditsAfter, r.creditsDelta,
                      r.creditsKnown ? "true" : "false", r.merged ? "true" : "false",
-                     r.ms, r.ok ? "true" : "false");
+                     r.ms, r.ok ? "true" : "false", r.enterprise ? "true" : "false");
     if (n <= 0) return;
     char day[16]{};
     strftime(day, sizeof(day), "%Y%m%d", &local);
@@ -503,6 +521,7 @@ void AccountPool::usageRecordPending(std::shared_ptr<Account> acc, const ModelCa
     r.out = outTok;
     r.cache = cacheTok;
     r.ms = ms;
+    if (acc->auth.isSaas()) { r.enterprise = true; usageAppend(r); return; }
     std::lock_guard<std::mutex> lk(m_usageMtx);
     m_usagePending.push_back({ std::move(acc), std::move(r) });
 }
@@ -542,6 +561,7 @@ static bool usageParseLine(const std::string& line, UsageRecord& r) {
     r.creditsAfter = j.get("after", Json((double)0)).asDouble(0);
     r.creditsDelta = j.get("delta", Json((double)0)).asDouble(0);
     r.creditsKnown = j.get("known", Json(false)).asBool(false);
+    r.enterprise = j.get("enterprise", Json(false)).asBool(false);
     r.merged = j.get("merged", Json(false)).asBool(false);
     r.ms = (int)j.get("ms", Json((double)0)).asDouble(0);
     r.ok = j.get("ok", Json(true)).asBool(true);
@@ -800,6 +820,7 @@ static bool findCodeDeep(const Json& j, int& code, int depth = 0) {
 }
 
 int AccountPool::doCheckin(Account& acc) {
+    if (acc.auth.isSaas()) return -1;
     if (!ensureFreshToken(acc)) return -1;
     std::string host = "https://api.trae.cn";
     if (!acc.auth.host.empty() && acc.auth.host.find("http") == 0) host = acc.auth.host;

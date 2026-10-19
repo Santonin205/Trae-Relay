@@ -1,4 +1,5 @@
 #include "accounts/WebLogin.h"
+#include "accounts/Saas.h"
 #include "common/Crypto.h"
 #include "common/Http.h"
 #include "common/HttpServer.h"
@@ -25,6 +26,7 @@ struct Attempt {
     std::mutex mutex;
     AuthData auth;
     std::string verifier;
+    std::string traceId;
     int port = 0;
     bool completed = false;
     std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
@@ -44,6 +46,23 @@ std::string getCode(const std::string& query) {
     for(auto q:{query,decode(query)}) {size_t pos=0;while(pos<q.size()){auto end=q.find('&',pos);auto pair=q.substr(pos,end==std::string::npos?end:end-pos);auto eq=pair.find('=');
         if(eq!=std::string::npos&&decode(pair.substr(0,eq))=="authCodeInfo"){Json j;if(Json::parse(decode(pair.substr(eq+1)),j))return j.get("AuthCode",Json("")).asString();}
         if(end==std::string::npos)break;pos=end+1;}}return {};
+}
+Json callbackFields(const std::string& query) {
+    Json fields = Json::object();
+    size_t pos = 0;
+    while (pos < query.size()) {
+        auto end = query.find('&', pos);
+        auto pair = query.substr(pos, end == std::string::npos ? end : end - pos);
+        auto eq = pair.find('=');
+        if (eq != std::string::npos) {
+            auto key = decode(pair.substr(0, eq));
+            if (fields.find(key)) throw std::runtime_error("重复的授权回调参数");
+            fields.set(key, decode(pair.substr(eq + 1)));
+        }
+        if (end == std::string::npos) break;
+        pos = end + 1;
+    }
+    return fields;
 }
 std::string b64url(const std::vector<uint8_t>& bytes){auto s=crypto::base64Encode(bytes);std::replace(s.begin(),s.end(),'+','-');std::replace(s.begin(),s.end(),'/','_');while(!s.empty()&&s.back()=='=')s.pop_back();return s;}
 std::vector<uint8_t> hash256(const std::string& s) {
@@ -92,21 +111,34 @@ std::string message(){std::lock_guard lock(mutex);return hint;}
 void stop(){pending=false;timer.request_stop();if(timer.joinable())timer.join();if(server)server->stop();server.reset();pending=false;}
 bool start(std::function<bool(std::shared_ptr<Account>,std::string&)> save,std::string& error){
     if(pending){error="请先完成已打开的网页登录";return false;}stop();
-    try{auto attempt=std::make_shared<Attempt>();createDevice(attempt->auth);attempt->verifier=b64url(crypto::randomBytes(48));auto challenge=b64url(hash256(attempt->verifier));
+    try{auto attempt=std::make_shared<Attempt>();createDevice(attempt->auth);attempt->traceId=crypto::genUuid();attempt->verifier=b64url(crypto::randomBytes(48));auto challenge=b64url(hash256(attempt->verifier));
         server=std::make_shared<HttpServer>();server->handler=[attempt,save](const HttpRequest& req,HttpResponseWriter& res){
             const std::vector<std::pair<std::string,std::string>> h={{"Cache-Control","no-store"},{"Referrer-Policy","no-referrer"}};
             if(req.method=="OPTIONS"){res.respond(204,"text/plain","");return;}
             auto host=req.header("host");if(!host||*host!="127.0.0.1:"+std::to_string(attempt->port)||req.method!="GET"||req.path!="/authorize"||req.query.size()>65536){res.respond(400,"text/plain","Invalid callback",h);return;}
             std::lock_guard lock(attempt->mutex);if(attempt->completed||!pending||std::chrono::steady_clock::now()-attempt->started>std::chrono::minutes(30)){res.respond(410,"text/plain","Login expired",h);return;}
-            try{auto code=getCode(req.query);if(code.empty())throw std::runtime_error("未收到授权码，请重新登录");Json b=Json::object();b.set("ClientID",client);b.set("AuthCode",code);b.set("CodeVerifier",attempt->verifier);b.set("DeviceInfo",attempt->auth.deviceInfo);b.set("IDEVersion",version());applyToken(attempt->auth,post(exchangePath,b));
-                Json info=Json::object();info.set("ReqSource","IDE");info.set("IDEVersion",version());auto user=post("/cloudide/api/v3/trae/GetUserInfo",info,attempt->auth.accessToken);attempt->auth.userId=user.get("UserID",Json("")).asString();if(attempt->auth.userId.empty())throw std::runtime_error("账号查询未通过验证");
+            try{
+                auto fields = callbackFields(req.query);
+                Json user = Json::object();
+                auto scope = fields.get("scope", Json("")).asString();
+                if (scope == "saas") {
+                    if (fields.get("loginTraceID", Json("")).asString() != attempt->traceId)
+                        throw std::runtime_error("企业授权会话不匹配，请重新登录");
+                    saas::acceptCredential(attempt->auth, fields);
+                    user.set("Name", attempt->auth.raw.get("account", Json()).get("username", Json("企业账号")));
+                } else {
+                    if (!scope.empty() && scope != "trae" && scope != "marscode")
+                        throw std::runtime_error("当前仅支持个人账号和 SaaS 企业账号");
+                    auto code=getCode(req.query);if(code.empty())throw std::runtime_error("未收到授权码，请重新登录");Json b=Json::object();b.set("ClientID",client);b.set("AuthCode",code);b.set("CodeVerifier",attempt->verifier);b.set("DeviceInfo",attempt->auth.deviceInfo);b.set("IDEVersion",version());applyToken(attempt->auth,post(exchangePath,b));
+                Json info=Json::object();info.set("ReqSource","IDE");info.set("IDEVersion",version());user=post("/cloudide/api/v3/trae/GetUserInfo",info,attempt->auth.accessToken);attempt->auth.userId=user.get("UserID",Json("")).asString();if(attempt->auth.userId.empty())throw std::runtime_error("账号查询未通过验证");
+                }
                 auto account=std::make_shared<Account>();account->auth=attempt->auth;account->machineId=attempt->auth.deviceInfo.get("MachineID",Json("")).asString();account->deviceId=attempt->auth.deviceInfo.get("DeviceID",Json("")).asString();account->editionId="cn";account->nickname=user.get("Username",user.get("Name",Json("Trae-"+account->auth.userId.substr(account->auth.userId.size()>4?account->auth.userId.size()-4:0)))).asString();
                 std::string err;if(!save(account,err))throw std::runtime_error(err);attempt->completed=true;status("网页登录成功，凭据已保存；请在列表中启用账号");res.respond(200,"text/html; charset=utf-8","<meta charset='utf-8'><h1>登录成功</h1><p>凭据已加密保存，请返回 TraeRelay 启用账号。</p>",h);
                 pending=false;
             }catch(const std::exception& e){status(e.what());res.respond(400,"text/html; charset=utf-8","<meta charset='utf-8'><h1>登录未完成</h1><p>请返回 TraeRelay 查看提示并重新登录。</p>",h);pending=false;}
         };
         if(!server->start("127.0.0.1",0,error))return false;attempt->port=server->port();
-        std::map<std::string,std::string> params={{"login_version","1"},{"auth_from","trae"},{"login_channel","native_ide"},{"plugin_version","2.3.90286"},{"auth_type","local"},{"client_id",client},{"redirect","0"},{"login_trace_id",crypto::genUuid()},{"auth_callback_url","http://127.0.0.1:"+std::to_string(attempt->port)+"/authorize"},{"machine_id",attempt->auth.deviceInfo.get("MachineID",Json("")).asString()},{"device_id",attempt->auth.deviceInfo.get("DeviceID",Json("")).asString()},{"x_app_version",version()},{"x_app_type","stable"},{"x_device_type","Windows"},{"code_challenge",challenge},{"code_challenge_method","S256"}};params["x_device_id"]=params["device_id"];params["x_machine_id"]=params["machine_id"];
+        std::map<std::string,std::string> params={{"login_version","1"},{"auth_from","trae"},{"login_channel","native_ide"},{"plugin_version","2.3.90286"},{"auth_type","local"},{"client_id",client},{"redirect","0"},{"login_trace_id",attempt->traceId},{"auth_callback_url","http://127.0.0.1:"+std::to_string(attempt->port)+"/authorize"},{"machine_id",attempt->auth.deviceInfo.get("MachineID",Json("")).asString()},{"device_id",attempt->auth.deviceInfo.get("DeviceID",Json("")).asString()},{"x_app_version",version()},{"x_app_type","stable"},{"x_device_type","Windows"},{"code_challenge",challenge},{"code_challenge_method","S256"}};params["x_device_id"]=params["device_id"];params["x_machine_id"]=params["machine_id"];
         std::string url="https://www.trae.cn/authorization?";for(auto& [k,v]:params)url+=k+"="+urlEncode(v)+"&";std::wstring wide(url.begin(),url.end());pending=true;status("等待官方网页登录，30 分钟内有效");
         if((INT_PTR)ShellExecuteW(nullptr,L"open",wide.c_str(),nullptr,nullptr,SW_SHOWNORMAL)<=32){stop();error="无法打开默认浏览器";return false;}
         auto srv=server;timer=std::jthread([attempt,srv](std::stop_token st){while(!st.stop_requested()&&pending&&std::chrono::steady_clock::now()-attempt->started<std::chrono::minutes(30))Sleep(100);if(pending&&!st.stop_requested()){pending=false;status("登录已超时，请重新打开网页登录");}{std::lock_guard lock(attempt->mutex);srv->stop();}});return true;

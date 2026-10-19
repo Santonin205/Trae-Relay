@@ -257,6 +257,11 @@ LRESULT WindowController::handleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                 PostMessageW(hwnd, WM_APP_CREDITS_DONE, 0, 0);
             });
         } else if (id == IDC_BTN_CHECKIN && code == BN_CLICKED) {
+            auto accounts = AccountPool::instance().accounts();
+            if (!accounts.empty() && accounts.front()->auth.isSaas()) {
+                ShellExecuteW(hwnd, L"open", L"https://console.enterprise.trae.cn/personal/usage", nullptr, nullptr, SW_SHOWNORMAL);
+                return 0;
+            }
             if (checkinRunning_.exchange(true)) return 0;
             setControlText(GetDlgItem(pageStatus_, IDC_BTN_CHECKIN), L"签到中...");
             InvalidateRect(GetDlgItem(pageStatus_, IDC_BTN_CHECKIN), nullptr, FALSE);
@@ -339,7 +344,7 @@ LRESULT WindowController::handleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     case WM_APP_CREDITS_DONE:
         creditsRunning_ = false;
         if (uiCreated_) {
-            setControlText(GetDlgItem(pageStatus_, IDC_BTN_CREDITS), L"积分已刷新");
+            setControlText(GetDlgItem(pageStatus_, IDC_BTN_CREDITS), L"用量已刷新");
             InvalidateRect(GetDlgItem(pageStatus_, IDC_BTN_CREDITS), nullptr, FALSE);
             SetTimer(hwnd, kTimerCreditsHint, 1500, nullptr); // 1.5s 后恢复按钮文字
             refreshStatusPage(hwnd);

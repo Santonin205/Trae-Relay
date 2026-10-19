@@ -1,5 +1,6 @@
 #include "accounts/Credentials.h"
 #include "accounts/WebLogin.h"
+#include "accounts/Saas.h"
 #include "common/Crypto.h"
 #include "upstream/ModelCatalog.h"
 #include <windows.h>
@@ -47,7 +48,7 @@ void writeAccount(const Account& a){auto text=pack(a).dump();auto encrypted=prot
 std::shared_ptr<Account> load(const Json& row){
     auto text=protect(readFile(vault(str(row,"id"))),true);Json j;bool ok=Json::parse(text,j);SecureZeroMemory(text.data(),text.size());if(!ok)throw std::runtime_error("凭据内容损坏");
     auto a=std::make_shared<Account>();auto& d=a->auth;d.raw=j;d.credentialId=str(row,"id");d.credentialGeneration=str(row,"generation");d.accessToken=str(j,"token");d.refreshToken=str(j,"refreshToken");d.userId=str(j,"userId");d.expiredRaw=str(j,"expiredAt");d.expiredTs=Storage::parseExpiry(d.expiredRaw);d.host=str(j,"host");d.clientId=str(j,"clientId");d.devicePrivateBlob=str(j,"privateBlob");d.deviceInfo=j.get("deviceInfo",Json());a->machineId=str(j,"machineId");a->deviceId=str(j,"deviceId");a->editionId=str(j,"editionId");a->nickname=str(row,"name");a->credits=row.get("credits",Json(-1)).asDouble(-1);
-    if(d.accessToken.empty())throw std::runtime_error("凭据缺少 token，请重新登录");return a;
+    saas::restoreIdentity(d);a->enterpriseUsage=row.get("enterpriseUsage",Json::object());if(d.accessToken.empty())throw std::runtime_error("凭据缺少 token，请重新登录");return a;
 }
 int find(const std::string& id){auto& rows=registry["rows"];for(size_t i=0;i<rows.size();++i)if(str(rows[i],"id")==id)return (int)i;return -1;}
 bool switchTo(const std::string& id,Json next,std::string& error){
@@ -66,12 +67,12 @@ bool switchTo(const std::string& id,Json next,std::string& error){
     }catch(const std::exception&e){error=e.what();return false;}
 }
 bool add(std::shared_ptr<Account>a,const std::string& src,std::string& error){
-    std::lock_guard lock(guard);try{auto current=AccountPool::instance().accounts();std::unique_lock<std::recursive_mutex> tokenLock;if(!current.empty()){tokenLock=std::unique_lock<std::recursive_mutex>(current.front()->refreshMtx,std::try_to_lock);if(!tokenLock.owns_lock()){error="Credential refresh in progress; retry shortly";return false;}}Json next=registry;int existing=-1;auto fingerprint=crypto::sha512Hex(a->auth.userId+"|"+a->editionId);for(size_t i=0;i<next["rows"].size();++i){auto& r=next["rows"][i];if(str(r,"fingerprint")==fingerprint&&str(r,"source")==src){existing=(int)i;break;}}
+    std::lock_guard lock(guard);try{auto current=AccountPool::instance().accounts();std::unique_lock<std::recursive_mutex> tokenLock;if(!current.empty()){tokenLock=std::unique_lock<std::recursive_mutex>(current.front()->refreshMtx,std::try_to_lock);if(!tokenLock.owns_lock()){error="Credential refresh in progress; retry shortly";return false;}}Json next=registry;int existing=-1;auto fingerprint=crypto::sha512Hex(a->auth.userId+"|"+a->editionId+(a->auth.isSaas()?"|saas|"+a->auth.tenantId:"" ));for(size_t i=0;i<next["rows"].size();++i){auto& r=next["rows"][i];if(str(r,"fingerprint")==fingerprint&&str(r,"source")==src){existing=(int)i;break;}}
         Json r=existing>=0?next["rows"][existing]:Json::object();std::string id=existing>=0?str(r,"id"):crypto::genUuid();a->auth.credentialId=id;a->auth.credentialGeneration=crypto::genUuid();
         if(str(registry,"active")==id){auto current=AccountPool::instance().accounts();if(!current.empty()&&current.front()->active.load()>0){error="该账号有请求进行中，请结束后重新登录";return false;}}
-        r.set("id",id);r.set("generation",a->auth.credentialGeneration);r.set("source",src);r.set("fingerprint",fingerprint);if(str(r,"name").empty())r.set("name",a->nickname);else a->nickname=str(r,"name");if(existing<0||src=="web")r.set("acquired",Json((int64_t)time(nullptr)));r.set("credits",Json(-1));r.set("creditTime",Json(0));r.set("creditError","");writeAccount(*a);
+        r.set("id",id);r.set("generation",a->auth.credentialGeneration);r.set("source",src);r.set("accountType",a->auth.isSaas()?"saas":"personal");r.set("tenantName",a->auth.tenantName);r.set("enterpriseUsage",Json::object());r.set("fingerprint",fingerprint);if(str(r,"name").empty())r.set("name",a->nickname);else a->nickname=str(r,"name");if(existing<0||src=="web")r.set("acquired",Json((int64_t)time(nullptr)));r.set("credits",Json(-1));r.set("creditTime",Json(0));r.set("creditError","");writeAccount(*a);
         if(existing>=0)next["rows"][existing]=r;else next["rows"].push_back(r);
-        if(str(registry,"active")==id){if(!AccountPool::instance().replaceActive(a,[&]{commit(next);})){error="Account is busy; saved credentials will be used on restart";return false;}}else commit(next);return true;
+        if(str(registry,"active")==id){if(!AccountPool::instance().replaceActive(a,[&]{commit(next);})){error="Account is busy; saved credentials will be used on restart";return false;}ModelCatalog::instance().requestRefresh();}else commit(next);return true;
     }catch(const std::exception&e){error=e.what();return false;}
 }
 }
@@ -87,7 +88,7 @@ std::string source(){std::lock_guard lock(guard);return str(registry,"source");}
 std::string message(){std::lock_guard lock(guard);auto login=webLogin::message();return login.empty()?notice:login;}
 bool busy(){return refreshing||webLogin::busy();}
 std::vector<CredentialRow> rows(){std::lock_guard lock(guard);std::vector<CredentialRow>out;auto accounts=AccountPool::instance().accounts();
-    for(size_t i=0;i<registry["rows"].size();++i){auto&r=registry["rows"][i];if(str(r,"source")!=str(registry,"source"))continue;CredentialRow v;v.id=str(r,"id");v.name=str(r,"name");v.source=str(r,"source");v.acquired=r.get("acquired",Json(0)).asInt();v.credits=r.get("credits",Json(-1)).asDouble(-1);v.creditTime=r.get("creditTime",Json(0)).asInt();v.creditError=str(r,"creditError");v.enabled=str(registry,"active")==v.id&&!accounts.empty();if(v.enabled){v.credits=accounts.front()->credits.load();if(accounts.front()->creditsCheckedAt.load()>v.creditTime){v.creditTime=accounts.front()->creditsCheckedAt.load();v.creditError.clear();}}out.push_back(v);}return out;
+    for(size_t i=0;i<registry["rows"].size();++i){auto&r=registry["rows"][i];if(str(r,"source")!=str(registry,"source"))continue;CredentialRow v;v.id=str(r,"id");v.name=str(r,"name");v.enterprise=str(r,"accountType")=="saas";v.tenantName=str(r,"tenantName");v.enterpriseUsage=r.get("enterpriseUsage",Json::object());v.source=str(r,"source");v.acquired=r.get("acquired",Json(0)).asInt();v.credits=r.get("credits",Json(-1)).asDouble(-1);v.creditTime=r.get("creditTime",Json(0)).asInt();v.creditError=str(r,"creditError");v.enabled=str(registry,"active")==v.id&&!accounts.empty();if(v.enabled){v.enterprise=accounts.front()->auth.isSaas();v.tenantName=accounts.front()->auth.tenantName;v.enterpriseUsage=saas::usage(*accounts.front());v.credits=accounts.front()->credits.load();if(accounts.front()->creditsCheckedAt.load()>v.creditTime){v.creditTime=accounts.front()->creditsCheckedAt.load();v.creditError.clear();}}out.push_back(v);}return out;
 }
 bool discover(std::string& error){std::lock_guard lock(guard);if(str(registry,"source")!="default"){error="请先选择默认目录来源";return false;}bool any=false;
     for(auto&ed:Storage::discoverEditions()){auto a=std::make_shared<Account>();if(!Storage::readAuth(ed.userDir,a->auth,error))continue;a->machineId=Storage::readMachineId(ed.userDir);a->deviceId=Storage::readAhaDeviceId(ed.userDir);if(a->deviceId.empty())a->deviceId=Storage::readDeviceId(ed.userDir);if(a->deviceId.empty())a->deviceId=a->machineId;a->editionId=ed.id;a->nickname="Trae-"+a->auth.userId.substr(a->auth.userId.size()>4?a->auth.userId.size()-4:0);if(!add(a,"default",error))return false;any=true;}
@@ -103,8 +104,8 @@ bool persist(const Account& a,std::string& error){std::lock_guard lock(guard);if
 bool refreshWeb(AuthData& auth,std::string& error){return webLogin::refresh(auth,error);}
 void refreshAll(){if(refreshing.exchange(true))return;try{auto list=rows();for(auto&r:list){std::shared_ptr<Account>a;{std::lock_guard lock(guard);int i=find(r.id);if(i<0)continue;auto active=AccountPool::instance().accounts();if(!active.empty()&&active.front()->auth.credentialId==r.id)a=active.front();else a=load(registry["rows"][i]);}
         auto before = a->creditsUpdated.load();
-        AccountPool::instance().refreshCredits(a.get());{std::lock_guard lock(guard);int i=find(r.id);if(i>=0){auto next=registry;auto&row=next["rows"][i];row.set("credits",Json(a->credits.load()));if(a->creditsUpdated.load()>before)row.set("creditTime",Json((int64_t)time(nullptr)));row.set("creditError",a->creditsUpdated.load()==before?"刷新失败":"");commit(next);}}}
-        std::lock_guard lock(guard);notice="积分刷新完成";
+        AccountPool::instance().refreshCredits(a.get());{std::lock_guard lock(guard);int i=find(r.id);if(i>=0){auto next=registry;auto&row=next["rows"][i];row.set("credits",Json(a->credits.load()));row.set("accountType",a->auth.isSaas()?"saas":"personal");row.set("tenantName",a->auth.tenantName);row.set("enterpriseUsage",saas::usage(*a));if(a->creditsUpdated.load()>before)row.set("creditTime",Json((int64_t)time(nullptr)));row.set("creditError",a->creditsUpdated.load()==before?"刷新失败":"");commit(next);}}}
+        std::lock_guard lock(guard);notice="用量刷新完成";
     }catch(const std::exception&e){std::lock_guard lock(guard);notice=e.what();}refreshing=false;
 }
 bool startLogin(std::string& error){if(source()!="web"){error="请先选择网页登录凭据";return false;}return webLogin::start([](std::shared_ptr<Account>a,std::string&e){return add(a,"web",e);},error);}

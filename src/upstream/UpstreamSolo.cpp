@@ -90,6 +90,11 @@ UpResult upstreamSolo(const UpRequest& req, Account& acc, const ModelCaps& caps,
     std::string configName = caps.configName.empty() ? req.model : caps.configName;
 
     Json body = Json::object();
+    if (acc.auth.isSaas()) {
+        // SaaS validates conversation identity; the public personal gateway accepts its absence.
+        body.set("session_id", crypto::genUuid());
+        body.set("conversation_id", crypto::genUuid());
+    }
     Json messages = Json::array();
     // 工具调用走上游原生 function calling（body.tools），不再注入文本协议
     for (const auto& m : req.messages) {
@@ -181,7 +186,9 @@ UpResult upstreamSolo(const UpRequest& req, Account& acc, const ModelCaps& caps,
     }
 
     http::Headers hd = ideHeaders(acc, cfg->ideVersion, cfg->ideVersionCode, true);
-    auto stream = http::openStream("POST", std::string(kSoloHost) + "/api/agent/v3/llm_utils_chat",
+    std::string host;
+    { std::lock_guard lock(acc.refreshMtx); host = acc.auth.isSaas() ? acc.auth.host : kSoloHost; }
+    auto stream = http::openStream("POST", host + "/api/agent/v3/llm_utils_chat",
                                    hd, body.dump(), cfg->firstEventTimeoutSec * 1000,
                                    cfg->upstreamTimeoutSec * 1000);
     if (!stream || stream->status == 0) {

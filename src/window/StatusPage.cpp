@@ -1,6 +1,7 @@
 #include "window/WindowController.h"
 #include "app/Config.h"
 #include "common/Stats.h"
+#include "accounts/Saas.h"
 #include <ctime>
 
 namespace ui {
@@ -56,20 +57,24 @@ void WindowController::paintStatusPage(Canvas& dc, int width, int) {
     } else {
         auto account = accounts.front();
         std::wstring nickname = toWide(credentials::displayName(*account));
+        const bool enterprise = account->auth.isSaas();
+        if (enterprise) nickname += L" · 企业 SaaS";
         if (nickname.empty()) nickname = L"未命名账号";
-        drawText(dc, nickname, { 60, 120, width - 360, 32 }, FMetricSemibold, C_TEXT,
+        drawText(dc, nickname, { 60, 120, width - 360, enterprise ? 26 : 32 }, FMetricSemibold, C_TEXT,
                  DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        // 四列：小标签在上，读数在下
+        // 沿用四列间距，企业账号仅显示状态和今日 Token。
         const int columnWidth = (width - 120) / 4;
         const int valueWidth = columnWidth - 20;
         const int creditsX = 60 + columnWidth;
-        const int tokensX = 60 + columnWidth * 2;
+        const int tokensX = 60 + columnWidth * (enterprise ? 1 : 2);
         const int consumedX = 60 + columnWidth * 3;
         const auto today = stats::usageToday();
         paintGroupLabel(dc, 60, 164, L"状态");
-        paintGroupLabel(dc, creditsX, 164, L"积分");
         paintGroupLabel(dc, tokensX, 164, L"今日 Token");
-        paintGroupLabel(dc, consumedX, 164, L"今日积分消耗");
+        if (!enterprise) {
+            paintGroupLabel(dc, creditsX, 164, L"积分");
+            paintGroupLabel(dc, consumedX, 164, L"今日积分消耗");
+        }
         const bool queued = account->queued.load() > 0;
         const bool active = account->active.load() > 0;
         const wchar_t* stateText = queued ? L"排队中" : active ? L"请求中" : L"正常";
@@ -77,20 +82,22 @@ void WindowController::paintStatusPage(Canvas& dc, int width, int) {
         dc.ellipse({62, 194, 8, 8}, stateColor);
         drawText(dc, stateText, { 78, 182, valueWidth - 18, 32 }, FBody, C_TEXT,
                  DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        double amount = account->credits.load();
-        std::wstring credits = L"--";
-        if (amount >= 0) {
-            wchar_t buf[64]{};
-            swprintf(buf, 64, L"%.2f", amount);
-            credits = buf;
+        if (!enterprise) {
+            double amount = account->credits.load();
+            std::wstring credits = L"--";
+            if (amount >= 0) {
+                wchar_t buf[64]{};
+                swprintf(buf, 64, L"%.2f", amount);
+                credits = buf;
+            }
+            drawText(dc, credits, { creditsX, 180, valueWidth, 32 }, FMetricSemibold, C_TEXT,
+                     DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            drawText(dc, formatCreditsConsumed(today.creditsConsumed),
+                     { consumedX, 180, valueWidth, 32 }, FMetricSemibold, C_TEXT,
+                     DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
-        drawText(dc, credits, { creditsX, 180, valueWidth, 32 }, FMetricSemibold, C_TEXT,
-                 DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         drawText(dc, formatTokens(today.tokens),
                  { tokensX, 180, valueWidth, 32 }, FMetricSemibold, C_TEXT,
-                 DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        drawText(dc, formatCreditsConsumed(today.creditsConsumed),
-                 { consumedX, 180, valueWidth, 32 }, FMetricSemibold, C_TEXT,
                  DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
 
@@ -130,7 +137,7 @@ std::wstring WindowController::baseUrlText() {
 
 void WindowController::createStatusControls() {
     auto& cfg = Config::instance();
-    makeControl(pageStatus_, L"刷新积分", WS_VISIBLE | BS_OWNERDRAW | BS_NOTIFY, IDC_BTN_CREDITS);
+    makeControl(pageStatus_, L"刷新用量", WS_VISIBLE | BS_OWNERDRAW | BS_NOTIFY, IDC_BTN_CREDITS);
     makeControl(pageStatus_, L"立即签到", WS_VISIBLE | BS_OWNERDRAW | BS_NOTIFY, IDC_BTN_CHECKIN);
     makeControl(pageStatus_, L"任意 Key", WS_VISIBLE | BS_OWNERDRAW | BS_NOTIFY, IDC_CHK_ANYKEY);
     setChecked(IDC_CHK_ANYKEY, cfg.allowAnyApiKey);
@@ -228,6 +235,8 @@ void WindowController::refreshStatusPage(HWND) {
     enableControl(GetDlgItem(pageStatus_, IDC_BTN_CREDITS), hasAccount);
     enableControl(GetDlgItem(pageStatus_, IDC_BTN_CHECKIN),
                  hasAccount && !checkinRunning_.load());
+    if (!checkinRunning_.load()) setControlText(GetDlgItem(pageStatus_, IDC_BTN_CHECKIN),
+        hasAccount && accounts.front()->auth.isSaas() ? L"企业用量" : L"立即签到");
     // 比较账号卡真正显示的值；余额小数位、请求状态及跨日请求数均纳入。
     CardState current;
     if (hasAccount) {
@@ -240,6 +249,12 @@ void WindowController::refreshStatusPage(HWND) {
         current.credits = amount >= 0 ? amountText : L"--";
         const auto today = stats::usageToday();
         current.creditsConsumed = formatCreditsConsumed(today.creditsConsumed);
+        if (account->auth.isSaas()) {
+            current.nickname += L" · 企业 SaaS";
+            auto u = saas::usage(*account);
+            current.credits = toWide(saas::summary(u));
+            current.creditsConsumed = toWide(u.dump());
+        }
         current.tokens = today.tokens;
     }
     bool changed = previousCardWindow_ != pageStatus_ || current != previousCard_;

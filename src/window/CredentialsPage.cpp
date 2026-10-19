@@ -12,9 +12,9 @@ struct CredentialTableLayout {
     explicit CredentialTableLayout(int width) {
         const int flexible = width - 120 - 164;
         edge[0] = 60;
-        edge[1] = edge[0] + flexible * 32 / 100;
-        edge[2] = edge[0] + flexible * 66 / 100;
-        edge[3] = edge[0] + flexible * 83 / 100;
+        edge[1] = edge[0] + flexible * 24 / 100;
+        edge[2] = edge[0] + flexible * 50 / 100;
+        edge[3] = edge[0] + flexible * 88 / 100;
         edge[4] = width - 60 - 164;
         edge[5] = width - 60;
     }
@@ -27,7 +27,7 @@ void WindowController::createCredentialsControls(){
     makeControl(pageCredentials_,L"加载默认目录凭据",WS_VISIBLE|BS_OWNERDRAW|BS_NOTIFY,IDC_CRED_DEFAULT);
     makeControl(pageCredentials_,L"使用网页登录凭据",WS_VISIBLE|BS_OWNERDRAW|BS_NOTIFY,IDC_CRED_WEB);
     makeControl(pageCredentials_,L"网页登录",WS_VISIBLE|BS_OWNERDRAW|BS_NOTIFY,IDC_CRED_LOGIN);
-    makeControl(pageCredentials_,L"刷新积分",WS_VISIBLE|BS_OWNERDRAW|BS_NOTIFY,IDC_CRED_REFRESH);
+    makeControl(pageCredentials_,L"刷新用量",WS_VISIBLE|BS_OWNERDRAW|BS_NOTIFY,IDC_CRED_REFRESH);
     makeControl(pageCredentials_,L"上一页",WS_VISIBLE|BS_OWNERDRAW|BS_NOTIFY,IDC_CRED_PREV);
     makeControl(pageCredentials_,L"下一页",WS_VISIBLE|BS_OWNERDRAW|BS_NOTIFY,IDC_CRED_NEXT);
     for(int i=0;i<7;++i)makeControl(pageCredentials_,L"",WS_VISIBLE|BS_OWNERDRAW|BS_NOTIFY,IDC_CRED_SLOT0+i);
@@ -51,7 +51,9 @@ void WindowController::layoutCredentialsPage(){
         HDC dc=GetDC(name);auto old=SelectObject(dc,reinterpret_cast<HFONT>(SendMessageW(name,WM_GETFONT,0,0)));
         TEXTMETRICW metrics{};GetTextMetricsW(dc,&metrics);SelectObject(dc,old);ReleaseDC(name,dc);
         const int nameHeight=MulDiv(metrics.tmHeight,96,dpi::forWindow(name));
-        place(pageCredentials_,name,{table.edge[0]+12,y+(CredentialTableLayout::contentHeight-nameHeight)/2,table.edge[1]-table.edge[0]-24,nameHeight});
+        int rowIndex=credentialPage_*CRED_PAGE_SIZE+i;
+        bool enterprise=rowIndex<(int)credentialRows_.size()&&credentialRows_[rowIndex].enterprise;
+        place(pageCredentials_,name,{table.edge[0]+12,y+(enterprise?3:(CredentialTableLayout::contentHeight-nameHeight)/2),table.edge[1]-table.edge[0]-24,nameHeight});
         const int actionX=table.edge[4]+(table.edge[5]-table.edge[4]-138)/2;
         place(pageCredentials_,GetDlgItem(pageCredentials_,IDC_CRED_ENABLE+i),{actionX,y+8,64,30});
         place(pageCredentials_,GetDlgItem(pageCredentials_,IDC_CRED_DELETE+i),{actionX+74,y+8,64,30});
@@ -69,7 +71,7 @@ void WindowController::refreshCredentialsPage(){
     ShowWindow(GetDlgItem(pageCredentials_,IDC_CRED_REFRESH),defaults?SW_HIDE:SW_SHOW);
     for(int id:{IDC_CRED_DEFAULT,IDC_CRED_WEB,IDC_CRED_LOGIN,IDC_CRED_REFRESH})enableControl(GetDlgItem(pageCredentials_,id),!working);
     setControlText(GetDlgItem(pageCredentials_,IDC_CRED_LOGIN),credentials::busy()?L"等待登录…":L"网页登录");
-    setControlText(GetDlgItem(pageCredentials_,IDC_CRED_REFRESH),credentialWorking_?L"处理中…":L"刷新积分");
+    setControlText(GetDlgItem(pageCredentials_,IDC_CRED_REFRESH),credentialWorking_?L"处理中…":L"刷新用量");
     for(int i=0;i<CRED_PAGE_SIZE;++i){int idx=credentialPage_*CRED_PAGE_SIZE+i;bool exists=!defaults&&idx<(int)credentialRows_.size();
         for(int base:{IDC_CRED_NAME,IDC_CRED_ENABLE,IDC_CRED_DELETE})ShowWindow(GetDlgItem(pageCredentials_,base+i),exists?SW_SHOW:SW_HIDE);
         if(!exists)continue;auto&r=credentialRows_[idx];auto name=GetDlgItem(pageCredentials_,IDC_CRED_NAME+i);if(GetFocus()!=name)setControlText(name,toWide(r.name).c_str());
@@ -84,15 +86,18 @@ void WindowController::paintCredentialsPage(Canvas& dc,int w,int h){
     bool defaults=credentials::source()!="web";
     paintPageHeader(dc,w,L"凭据管理");paintPanel(dc,40,76,w-80,defaults?104:150);
     if(defaults)return;
+    auto notice = credentials::message();
+    if (!notice.empty()) dc.text(toWide(notice),{350,180,w-410,32},FSmall,C_MUTED);
     const CredentialTableLayout table(w);
-    const wchar_t* headings[]={L"账号名称（可编辑）",L"获取时间",L"积分",L"是否启用",L"操作"};
+    const wchar_t* headings[]={L"账号名称（可编辑）",L"获取时间",L"积分",L"状态",L"操作"};
     for(int column=0;column<5;++column)dc.text(headings[column],table.cell(column,242,28),FLabel,C_MUTED,{TextAlign::Center});
     drawDivider(dc,60,274,w-60);
     for(int i=0;i<CRED_PAGE_SIZE;++i){int idx=credentialPage_*CRED_PAGE_SIZE+i;if(idx>=(int)credentialRows_.size())break;auto&r=credentialRows_[idx];int y=CredentialTableLayout::top+i*CredentialTableLayout::rowHeight;
         dc.fill({60,y,w-120,46},i%2?C_ROW_STRIPE:C_SURFACE);
+        if(r.enterprise)dc.text(L"企业 · "+toWide(r.tenantName),table.cell(0,y+25,20),FSmall,C_MUTED,{TextAlign::Center});
         dc.text(dateText(r.acquired),table.cell(1,y,CredentialTableLayout::contentHeight),FBody,C_TEXT,{TextAlign::Center});
         wchar_t credit[40];swprintf(credit,40,L"%.1f",r.credits);auto amount=!r.creditError.empty()?L"刷新失败":r.credits<0?L"未查询":credit;
-        dc.text(amount,table.cell(2,y,CredentialTableLayout::contentHeight),FBody,C_TEXT,{TextAlign::Center});
+        dc.text(r.enterprise?L"—":amount,table.cell(2,y,CredentialTableLayout::contentHeight),FBody,C_TEXT,{TextAlign::Center});
         dc.text(r.enabled?L"已启用":L"未启用",table.cell(3,y,CredentialTableLayout::contentHeight),FBody,r.enabled?C_ACCENT_INK:C_MUTED,{TextAlign::Center});
     }
     if(credentialRows_.empty()){dc.text(L"暂无凭据，请通过网页登录添加。",{60,304,w-120,40},FBody,C_MUTED);return;}

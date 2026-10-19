@@ -122,7 +122,7 @@ static void paintUsageRows(Canvas& dc, int width, int height, const UsageTableVi
         wcsftime(ts, 32, L"%Y/%m/%d %H:%M:%S", &local);
         wchar_t credits[48]{};
         if (r.creditsKnown) swprintf(credits, 48, L"%.2f", r.creditsDelta);
-        else swprintf(credits, 48, L"--");
+        else swprintf(credits, 48, r.enterprise ? L"—" : L"--");
         wchar_t joined[96]{};
         swprintf(joined, 96, L"%s%s", credits, r.merged ? L" (并发合计)" : L"");
         drawCell(ts, 0, y, C_TEXT);
@@ -153,7 +153,7 @@ void paintUsageTable(Canvas& dc, int width, int height, const UsageTableView& vi
     }
     // 列带：按固定比例分配（几何源 usageColumns），避免端点与 TOKEN 之间出现大段空白
     UsageCols cols = usageColumns(width);
-    const wchar_t* titles[5] = { L"时间", L"模型", L"端点", L"TOKEN", L"积分" };
+    const wchar_t* titles[5] = { L"时间", L"模型", L"端点", L"TOKEN", L"消耗" };
     for (int i = 0; i < 5; ++i) {
         R r{ cols.x[i], 94, cols.w[i], 24 };
         drawText(dc, titles[i], r, FLabel, C_MUTED,

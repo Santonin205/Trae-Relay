@@ -743,7 +743,13 @@ static void handleStatus(const HttpRequest& req, HttpResponseWriter& w) {
         Json o = Json::object();
         o.set("nickname", Json(a->nickname));
         o.set("edition", Json(a->editionId));
-        o.set("credits", Json(a->credits.load()));
+        o.set("credits", a->auth.isSaas() ? Json() : Json(a->credits.load()));
+        o.set("accountType", a->auth.isSaas() ? "saas" : "personal");
+        if (a->auth.isSaas()) {
+            o.set("tenantName", a->auth.tenantName);
+            std::lock_guard lock(a->usageMtx);
+            o.set("enterpriseUsage", a->enterpriseUsage);
+        }
         o.set("active", Json(a->active.load()));
         o.set("lastUsed", Json(a->lastUsedTs.load()));
         accs.push_back(o);

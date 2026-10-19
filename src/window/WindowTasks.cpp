@@ -12,11 +12,13 @@ void WindowController::clearSavedHint(HWND hwnd) {
 
 void WindowController::restoreCreditsButton(HWND hwnd) {
     KillTimer(hwnd, kTimerCreditsHint);
-    setControlText(GetDlgItem(pageStatus_, IDC_BTN_CREDITS), L"刷新积分");
+    setControlText(GetDlgItem(pageStatus_, IDC_BTN_CREDITS), L"刷新用量");
     InvalidateRect(GetDlgItem(pageStatus_, IDC_BTN_CREDITS), nullptr, FALSE);
 }
 
 void WindowController::tickAutoCheckin(HWND hwnd) {
+    auto accounts = AccountPool::instance().accounts();
+    if (!accounts.empty() && accounts.front()->auth.isSaas()) return;
     auto& cfg = Config::instance();
     time_t now = time(nullptr);
     if (cfg.checkinEnabled) {

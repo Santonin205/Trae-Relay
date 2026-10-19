@@ -7,6 +7,9 @@ struct CredentialRow {
     long long acquired = 0, creditTime = 0;
     double credits = -1;
     bool enabled = false;
+    bool enterprise = false;
+    std::string tenantName;
+    Json enterpriseUsage = Json::object();
 };
 
 namespace credentials {

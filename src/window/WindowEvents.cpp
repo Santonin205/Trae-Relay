@@ -262,22 +262,7 @@ LRESULT WindowController::handleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                 ShellExecuteW(hwnd, L"open", L"https://console.enterprise.trae.cn/personal/usage", nullptr, nullptr, SW_SHOWNORMAL);
                 return 0;
             }
-            if (checkinRunning_.exchange(true)) return 0;
-            setControlText(GetDlgItem(pageStatus_, IDC_BTN_CHECKIN), L"签到中...");
-            InvalidateRect(GetDlgItem(pageStatus_, IDC_BTN_CHECKIN), nullptr, FALSE);
-            checkinWorker_ = std::jthread([hwnd] {
-                bool any = false;
-                bool failed = false;
-                bool newlyClaimed = false;
-                for (auto& account : AccountPool::instance().accounts()) {
-                    any = true;
-                    int one = AccountPool::instance().doCheckin(*account);
-                    if (one < 0) failed = true;
-                    else if (one == 0) newlyClaimed = true;
-                }
-                int result = !any || failed ? -1 : newlyClaimed ? 0 : 1;
-                PostMessageW(hwnd, WM_APP_CHECKIN_DONE, static_cast<WPARAM>(result), 0);
-            });
+            startCheckin(hwnd);
         } else if (id == IDC_CB_MODEL && code == CBN_SELCHANGE) {
             loadModelSelection(hwnd);
         } else if (def && def->kind == Ck::EffortBtn && code == BN_CLICKED) {
@@ -324,21 +309,13 @@ LRESULT WindowController::handleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     case WM_APP_CHECKIN_DONE: {
         checkinRunning_ = false;
         int result = static_cast<int>(static_cast<INT_PTR>(wp));
-        if (result >= 0) {
-            time_t now = time(nullptr);
-            struct tm local{};
-            if (localtime_s(&local, &now) == 0) {
-                const long long today = (local.tm_year + 1900LL) * 10000 +
-                                       (local.tm_mon + 1) * 100 + local.tm_mday;
-                lastAutoCheckinDay_.store(today);
-            }
-        }
-        if (uiCreated_) {
-            setControlText(GetDlgItem(pageStatus_, IDC_BTN_CHECKIN),
-                           result > 0 ? L"今日已签到" : result == 0 ? L"签到完成" : L"签到失败，重试");
-            InvalidateRect(GetDlgItem(pageStatus_, IDC_BTN_CHECKIN), nullptr, FALSE);
-            refreshStatusPage(hwnd);
-        }
+        checkinResult_ = result;
+        const auto today = checkinLocalDay();
+        const auto accounts = AccountPool::instance().accounts();
+        if (result >= 0 && today >= 0 && checkinDay_ == today &&
+            !accounts.empty() && checkinAccount_.lock() == accounts.front())
+            lastAutoCheckinDay_.store(today);
+        if (uiCreated_) refreshStatusPage(hwnd);
         return 0;
     }
     case WM_APP_CREDITS_DONE:

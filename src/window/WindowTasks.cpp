@@ -16,6 +16,36 @@ void WindowController::restoreCreditsButton(HWND hwnd) {
     InvalidateRect(GetDlgItem(pageStatus_, IDC_BTN_CREDITS), nullptr, FALSE);
 }
 
+long long WindowController::checkinLocalDay() {
+    time_t now = time(nullptr);
+    struct tm local{};
+    if (localtime_s(&local, &now) != 0) return -1;
+    return (local.tm_year + 1900LL) * 10000 +
+           (local.tm_mon + 1) * 100 + local.tm_mday;
+}
+
+void WindowController::startCheckin(HWND hwnd) {
+    auto accounts = AccountPool::instance().accounts();
+    if (accounts.empty() || accounts.front()->auth.isSaas() ||
+        checkinRunning_.exchange(true)) return;
+    checkinAccount_ = accounts.front();
+    checkinDay_ = checkinLocalDay();
+    checkinResult_ = 2;
+    if (uiCreated_) refreshStatusPage(hwnd);
+    // 使用发起时的账号快照，切换账号后仍将结果归给原账号。
+    checkinWorker_ = std::jthread([hwnd, accounts = std::move(accounts)] {
+        bool failed = false;
+        bool newlyClaimed = false;
+        for (auto& account : accounts) {
+            int one = AccountPool::instance().doCheckin(*account);
+            if (one < 0) failed = true;
+            else if (one == 0) newlyClaimed = true;
+        }
+        int result = failed ? -1 : newlyClaimed ? 0 : 1;
+        PostMessageW(hwnd, WM_APP_CHECKIN_DONE, static_cast<WPARAM>(result), 0);
+    });
+}
+
 void WindowController::tickAutoCheckin(HWND hwnd) {
     auto accounts = AccountPool::instance().accounts();
     if (!accounts.empty() && accounts.front()->auth.isSaas()) return;
@@ -29,20 +59,8 @@ void WindowController::tickAutoCheckin(HWND hwnd) {
                                (local.tm_mon + 1) * 100 + local.tm_mday;
         int nowMin = local.tm_hour * 60 + local.tm_min;
         int targetMin = cfg.checkinHour * 60 + cfg.checkinMinute;
-        if (nowMin >= targetMin && lastAutoCheckinDay_.load() != today &&
-            !checkinRunning_.exchange(true)) {
-            checkinWorker_ = std::jthread([this, hwnd] {
-                bool any = false;
-                bool failed = false;
-                for (auto& account : AccountPool::instance().accounts())
-                {
-                    any = true;
-                    if (AccountPool::instance().doCheckin(*account) < 0) failed = true;
-                }
-                int result = !any || failed ? -1 : 1;
-                PostMessageW(hwnd, WM_APP_CHECKIN_DONE, static_cast<WPARAM>(result), 0);
-            });
-        }
+        if (nowMin >= targetMin && lastAutoCheckinDay_.load() != today)
+            startCheckin(hwnd);
     }
 }
 

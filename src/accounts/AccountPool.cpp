@@ -740,20 +740,23 @@ static bool findCheckinFlagDeep(const Json& j, bool& value, int depth = 0) {
         return false;
     };
     if (j.isObject()) {
-        // status 接口同时返回 checked_in（可签到资格）和
-        // did_checked_in（今天是否已领）。后者必须优先，否则会把
-        // 可签到账号误判为已签到，导致永远不调用 claim。
-        for (auto key : { "did_checked_in", "didCheckedIn" }) {
+        // 与官方客户端一致：checked_in 或 did_checked_in 任意为真即已签到，
+        // 避免 did_checked_in=false 覆盖 checked_in=true 后重复领取。
+        bool found = false;
+        for (auto key : { "checked_in", "did_checked_in", "didCheckedIn" }) {
             bool parsed = false;
-            if (parse(j.find(key), parsed)) { value = parsed; return true; }
+            if (parse(j.find(key), parsed)) {
+                found = true;
+                if (parsed) { value = true; return true; }
+            }
         }
+        if (found) { value = false; return true; }
         for (auto key : { "already_checked_in", "is_checked_in", "has_checked_in",
                           "isCheckIn", "checkedIn", "claimed", "alreadyClaimed",
                           "checkin_status", "checkinStatus" }) {
             bool parsed = false;
             if (parse(j.find(key), parsed)) { value = parsed; return true; }
         }
-        bool found = false;
         for (auto& m : j.members()) {
             bool child = false;
             if (findCheckinFlagDeep(m.second, child, depth + 1)) {
@@ -761,10 +764,7 @@ static bool findCheckinFlagDeep(const Json& j, bool& value, int depth = 0) {
                 return true;
             }
         }
-        // checked_in 仅作为老版本没有 did_checked_in 的最后回退。
-        bool checked = false;
-        if (parse(j.find("checked_in"), checked)) { value = checked; return true; }
-        return found;
+        return false;
     }
     if (j.isArray()) {
         for (size_t i = 0; i < j.size(); ++i) {

@@ -235,8 +235,18 @@ void WindowController::refreshStatusPage(HWND) {
     enableControl(GetDlgItem(pageStatus_, IDC_BTN_CREDITS), hasAccount);
     enableControl(GetDlgItem(pageStatus_, IDC_BTN_CHECKIN),
                  hasAccount && !checkinRunning_.load());
-    if (!checkinRunning_.load()) setControlText(GetDlgItem(pageStatus_, IDC_BTN_CHECKIN),
-        hasAccount && accounts.front()->auth.isSaas() ? L"企业用量" : L"立即签到");
+    const wchar_t* checkinText = L"立即签到";
+    const auto today = checkinLocalDay();
+    if (hasAccount && accounts.front()->auth.isSaas()) {
+        checkinText = L"企业用量";
+    } else if (hasAccount && checkinAccount_.lock() == accounts.front() &&
+               today >= 0 && checkinDay_ == today) {
+        if (checkinRunning_.load()) checkinText = L"签到中...";
+        else if (checkinResult_ == 1) checkinText = L"今日已签到";
+        else if (checkinResult_ == 0) checkinText = L"签到完成";
+        else if (checkinResult_ < 0) checkinText = L"签到失败，重试";
+    }
+    setControlText(GetDlgItem(pageStatus_, IDC_BTN_CHECKIN), checkinText);
     // 比较账号卡真正显示的值；余额小数位、请求状态及跨日请求数均纳入。
     CardState current;
     if (hasAccount) {

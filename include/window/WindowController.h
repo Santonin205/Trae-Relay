@@ -85,6 +85,10 @@ private:
     std::atomic<bool> checkinRunning_{ false };
     std::atomic<bool> creditsRunning_{ false };
     std::atomic<long long> lastAutoCheckinDay_{ -1 };
+    // 主线程维护，结果绑定发起签到时的账号和日期，避免刷新或切号串用。
+    std::weak_ptr<Account> checkinAccount_;
+    long long checkinDay_ = -1;
+    int checkinResult_ = 2; // 2=未查询，1=已签到，0=领取成功，-1=失败
     
     struct UsagePagerLayout {
         HWND window = nullptr;
@@ -157,6 +161,8 @@ private:
     void renderChrome(visual::Canvas& dc, HWND hwnd);
     void clearSavedHint(HWND hwnd);
     void restoreCreditsButton(HWND hwnd);
+    static long long checkinLocalDay();
+    void startCheckin(HWND hwnd);
     void tickAutoCheckin(HWND hwnd);
     void tickSecond(HWND hwnd);
     HICON appIcon();

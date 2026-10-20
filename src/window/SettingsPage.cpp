@@ -61,7 +61,7 @@ void WindowController::createSettingsControls() {
                 IDC_CHK_STARTMIN);
     makeControl(pageSettings_, L"关闭窗口时最小化到托盘", WS_VISIBLE | BS_OWNERDRAW | BS_NOTIFY,
                 IDC_CHK_MINCLOSE);
-    makeControl(pageSettings_, L"每日自动签到", WS_VISIBLE | BS_OWNERDRAW | BS_NOTIFY,
+    makeControl(pageSettings_, L"每日自动签到总开关", WS_VISIBLE | BS_OWNERDRAW | BS_NOTIFY,
                 IDC_CHK_CHECKIN);
     makeControl(pageSettings_, L"", WS_VISIBLE | ES_NUMBER, IDC_ED_HOUR);
     makeControl(pageSettings_, L"", WS_VISIBLE | ES_NUMBER, IDC_ED_MINUTE);
@@ -115,6 +115,7 @@ void WindowController::applySettingsInstant(HWND hwnd) {
     cfg.startMinimizedToTray = isChecked(IDC_CHK_STARTMIN);
     cfg.minimizeToTrayOnClose = isChecked(IDC_CHK_MINCLOSE);
     cfg.checkinEnabled = isChecked(IDC_CHK_CHECKIN);
+    if (!cfg.checkinEnabled) checkinWorker_.request_stop();
     cfg.checkinHour = hour;
     cfg.checkinMinute = minute;
     const bool previousLoggingEnabled = cfg.loggingEnabled;

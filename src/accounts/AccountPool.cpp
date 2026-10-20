@@ -820,69 +820,76 @@ static bool findCodeDeep(const Json& j, int& code, int depth = 0) {
 }
 
 int AccountPool::doCheckin(Account& acc) {
-    if (acc.auth.isSaas()) return -1;
+    if (acc.auth.isSaas() || acc.auth.userId.empty()) return -1;
     if (!ensureFreshToken(acc)) return -1;
-    std::string host = "https://api.trae.cn";
-    if (!acc.auth.host.empty() && acc.auth.host.find("http") == 0) host = acc.auth.host;
-    while (host.size() && host.back() == '/') host.pop_back();
+    std::string host = acc.auth.host.empty() ? "https://api.trae.cn" : acc.auth.host;
+    while (!host.empty() && host.back() == '/') host.pop_back();
     auto cfg = settings::get();
     auto hdr = ideHeaders(acc, cfg->ideVersion, cfg->ideVersionCode, false);
-    hdr.set("x-device-id", acc.deviceId.empty() ? acc.machineId : acc.deviceId);
+    // Web OAuth identity stays unchanged; only the checkin HTTP header uses this stable ID.
+    if (!acc.auth.devicePrivateBlob.empty())
+        hdr.set("x-device-id", crypto::checkinDeviceId(acc.auth.userId));
     Json request = Json::object();
     request.set("req_source", Json(acc.editionId == "work" ? 2 : 1));
-    auto st = http::send("POST", host + "/trae/api/v2/ug/checkin_credits/status", hdr, request.dump(), 15000);
-    Json j;
-    if (!st.ok() || !Json::parse(st.body, j)) {
-        LOG_W("账号 %s 签到状态请求失败: HTTP %d err=%s", acc.nickname.c_str(), st.status, st.error.c_str());
+    auto post = [&](const char* path, const Json& body, Json& out) {
+        hdr.set("x-request-id",crypto::genUuid());
+        auto response = http::send("POST",host + path,hdr,body.dump(),15000);
+        return response.ok() && Json::parse(response.body,out) && out.isObject();
+    };
+    auto state = [&](const Json& response) {
+        int code = 0;
+        if (findCodeDeep(response,code) && code != 0) return code == 9095 ? -2 : -1;
+        bool checked = false;
+        if (!findCheckinFlagDeep(response,checked)) return -1;
+        if (!checked) return 2;
+        const auto* accountFlag = response.find("checked_in");
+        if (accountFlag && accountFlag->isBool() && !accountFlag->asBool()) return -2;
+        return 1;
+    };
+    Json status;
+    if (!post("/trae/api/v2/ug/checkin_credits/status",request,status)) return -1;
+    int initial = state(status);
+    if (initial != 2) {
+        if (initial == 1) refreshCredits(&acc);
+        return initial;
+    }
+    // Account total is used for confirmation; remaining balance can change during concurrent chat.
+    auto total = [&](double& value) {
+        Json body=Json::object(), response;
+        body.set("require_usage",Json(true)); body.set("req_source",Json(0));
+        if (!post("/trae/api/v2/pay/ide_user_ent_usage",body,response)) return false;
+        int code=0;
+        if (findCodeDeep(response,code) && code!=0) return false;
+        auto summary=response.get("usage_summary",Json());
+        auto amount=summary.get("total_amount",Json());
+        if (!amount.isNumber()) return false;
+        value=amount.asDouble(); return true;
+    };
+    double before=0,after=0;
+    bool beforeKnown=total(before);
+    Json claim;
+    // A timeout may follow a successful upstream claim. Do not blindly replay it.
+    if (!post("/trae/api/v2/ug/checkin_credits/claim",request,claim)) {
+        if (post("/trae/api/v2/ug/checkin_credits/status",request,status) && state(status)==1) {
+            refreshCredits(&acc);
+            return -3;
+        }
         return -1;
     }
-    bool checked = false;
-    int statusCode = 0;
-    if (findCheckinFlagDeep(j, checked) && checked) {
-            LOG_I("账号 %s 今日已签到", acc.nickname.c_str());
-            return 1;
+    int code=0;
+    bool codeFound=findCodeDeep(claim,code);
+    if (codeFound && code!=0) {
+        LOG_W("Checkin rejected for %s: code=%d",acc.nickname.c_str(),code);
+        return code==9095 ? -2 : -1;
     }
-    if (findCodeDeep(j, statusCode) && statusCode == 9095) return 1;
-
-    // 9074「当前参与用户太多」是上游签到活动的并发限流，同一份请求换个时段就能成功
-    // （2026-09-19 实测：设计文档既定结论 9074→重试），退避重试等待窗口；
-    // 其余业务码维持一次性失败。
-    static constexpr int kClaimRetries = 5;
-    static constexpr int kRetryDelaySec[kClaimRetries] = { 15, 30, 45, 60, 60 };
-    for (int attempt = 0;; ++attempt) {
-        auto cl = http::send("POST", host + "/trae/api/v2/ug/checkin_credits/claim", hdr, request.dump(), 15000);
-        if (cl.status != 200) {
-            LOG_W("账号 %s 签到请求失败: HTTP %d", acc.nickname.c_str(), cl.status);
-            return -1;
-        }
-        bool parsed = Json::parse(cl.body, j);
-        int code = 0;
-        bool codeFound = parsed && findCodeDeep(j, code);
-        if (parsed && codeFound && code == 9074 && attempt < kClaimRetries) {
-            LOG_W("账号 %s 签到限流(9074)，%ds 后重试(%d/%d)", acc.nickname.c_str(),
-                  kRetryDelaySec[attempt], attempt + 1, kClaimRetries);
-            std::this_thread::sleep_for(std::chrono::seconds(kRetryDelaySec[attempt]));
-            continue;
-        }
-        bool already = codeFound && code == 9095;
-        bool flag = false;
-        bool flagFound = parsed && findCheckinFlagDeep(j, flag);
-        // 官方 claim：HTTP 200 且无业务码（或 code=0）才算成功。
-        // 响应不是合法 JSON 时绝不能误判成功（曾把非 JSON 的 200 拦截页
-        // 当成签到成功，积分实际一分没到账）。
-        bool success = parsed && (!codeFound || code == 0);
-        if (flagFound && flag) success = true;
-        if (success) {
-            LOG_I("账号 %s 签到成功", acc.nickname.c_str());
-            refreshCredits(&acc);
-            return 0;
-        } else if (already) {
-            LOG_I("账号 %s 今日已签到（9095）", acc.nickname.c_str());
-            return 1;
-        } else {
-            LOG_W("账号 %s 签到失败 code=%d body=%s", acc.nickname.c_str(), code,
-                  cl.body.substr(0, 200).c_str());
-            return -1;
-        }
+    if (!codeFound) return -3;
+    bool confirmed=post("/trae/api/v2/ug/checkin_credits/status",request,status) && state(status)==1;
+    bool afterKnown=total(after);
+    refreshCredits(&acc);
+    if (confirmed && beforeKnown && afterKnown && after>before) {
+        LOG_I("Checkin credited for %s: +%.1f",acc.nickname.c_str(),after-before);
+        return 0;
     }
+    LOG_W("Checkin accepted for %s; credit confirmation pending",acc.nickname.c_str());
+    return -3;
 }

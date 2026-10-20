@@ -38,6 +38,18 @@ AlgoHolder& algos() {
 
 namespace crypto {
 
+std::string checkinDeviceId(const std::string& userId) {
+    if (userId.empty()) throw std::runtime_error("Missing checkin user ID");
+    const std::string input = "TraeRelay-checkin-probe:" + userId;
+    unsigned char digest[32]{};
+    if (BCryptHash(BCRYPT_SHA256_ALG_HANDLE, nullptr, 0,
+                   (PUCHAR)input.data(), (ULONG)input.size(), digest, sizeof(digest)) != STATUS_SUCCESS)
+        throw std::runtime_error("Checkin device hash failed");
+    uint64_t value = 0;
+    for (int i = 0; i < 8; ++i) value = (value << 8) | digest[i];
+    return std::to_string(100000000000000ULL + value % 900000000000000ULL);
+}
+
 std::vector<uint8_t> sha512(const uint8_t* data, size_t len) {
     std::vector<uint8_t> out(64);
     BCRYPT_HASH_HANDLE h = nullptr;

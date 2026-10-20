@@ -119,7 +119,7 @@ public:
     long long usageCountToday(long long* tokens = nullptr, double* creditsConsumed = nullptr);
     // 退出时把未落账的记录写盘（积分未知口径），防丢条目。
     void usageFlushPending();
-    // 每日签到：0=领取成功，1=今日已领取，-1=失败
+    // 每日签到：0=到账已确认，1=今日已签到，-1=失败，-2=设备已签到，-3=到账待确认
     int doCheckin(Account& acc);
 
     static AccountPool& instance();

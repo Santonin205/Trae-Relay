@@ -69,6 +69,8 @@ const CtrlDef* ctrlDef(int id) {
     static const CtrlDef name{IDC_CRED_NAME,Ck::Edit,FBody,PAGE_CREDENTIALS};
     static const CtrlDef enable{IDC_CRED_ENABLE,Ck::Btn,FBody,PAGE_CREDENTIALS};
     static const CtrlDef remove{IDC_CRED_DELETE,Ck::Btn,FBody,PAGE_CREDENTIALS};
+    static const CtrlDef autoCheckin{IDC_CRED_AUTOCHECKIN,Ck::Check,FSmall,PAGE_CREDENTIALS};
+    if(id>=IDC_CRED_AUTOCHECKIN && id<IDC_CRED_AUTOCHECKIN+CRED_PAGE_SIZE)return &autoCheckin;
     if(id>=IDC_CRED_NAME && id<IDC_CRED_NAME+CRED_PAGE_SIZE)return &name;
     if(id>=IDC_CRED_ENABLE && id<IDC_CRED_ENABLE+CRED_PAGE_SIZE)return &enable;
     if(id>=IDC_CRED_DELETE && id<IDC_CRED_DELETE+CRED_PAGE_SIZE)return &remove;

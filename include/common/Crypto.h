@@ -6,6 +6,8 @@
 
 namespace crypto {
 
+std::string checkinDeviceId(const std::string& userId);
+
 // SHA-512
 std::vector<uint8_t> sha512(const uint8_t* data, size_t len);
 std::vector<uint8_t> sha512(const std::string& s);

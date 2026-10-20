@@ -9,6 +9,8 @@
 #include <fstream>
 #include <algorithm>
 #include <ctime>
+#include <map>
+#include "common/Log.h"
 
 namespace credentials {
 namespace {
@@ -17,6 +19,23 @@ Json registry=Json::object();
 bool initialized=false, healthy=true;
 std::string notice;
 std::atomic<bool> refreshing{false};
+bool autoCheckinEnabled(const Json& row) {
+    return row.get("source",Json("")).asString() == "web" &&
+           row.get("accountType",Json("")).asString() != "saas" &&
+           row.get("autoCheckin",Json(true)).asBool();
+}
+bool checkinDue(const Json& row, long long day, long long now) {
+    if (row.get("accountType",Json("")).asString() == "saas") return false;
+    const auto source = row.get("source",Json("")).asString();
+    if (source == "web") {
+        if (!autoCheckinEnabled(row)) return false;
+    } else if (source != "default" || registry.get("source",Json("")).asString() != "default" ||
+               row.get("id",Json("")).asString() != registry.get("active",Json("")).asString()) return false;
+    auto savedDay = row.get("checkinDay",Json(0)).asInt();
+    int result = (int)row.get("checkinResult",Json(2)).asInt();
+    if (savedDay == day && (result == 0 || result == 1 || result == -2 || result == -3)) return false;
+    return savedDay != day || row.get("checkinRetryAt",Json(0)).asInt() <= now;
+}
 std::filesystem::path root(){return std::filesystem::u8path(exeDir())/L"auth";}
 void migrateLegacyDirectory(){
     auto legacy=std::filesystem::u8path(exeDir())/L"credentials";
@@ -53,6 +72,7 @@ std::shared_ptr<Account> load(const Json& row){
 int find(const std::string& id){auto& rows=registry["rows"];for(size_t i=0;i<rows.size();++i)if(str(rows[i],"id")==id)return (int)i;return -1;}
 bool switchTo(const std::string& id,Json next,std::string& error){
     try {
+        if(refreshing.load()){error="正在处理账号任务，请完成后再切换";return false;}
         auto current=AccountPool::instance().accounts();
         std::unique_lock<std::recursive_mutex> tokenLock;
         if(!current.empty()){
@@ -71,6 +91,7 @@ bool add(std::shared_ptr<Account>a,const std::string& src,std::string& error){
         Json r=existing>=0?next["rows"][existing]:Json::object();std::string id=existing>=0?str(r,"id"):crypto::genUuid();a->auth.credentialId=id;a->auth.credentialGeneration=crypto::genUuid();
         if(str(registry,"active")==id){auto current=AccountPool::instance().accounts();if(!current.empty()&&current.front()->active.load()>0){error="该账号有请求进行中，请结束后重新登录";return false;}}
         r.set("id",id);r.set("generation",a->auth.credentialGeneration);r.set("source",src);r.set("accountType",a->auth.isSaas()?"saas":"personal");r.set("tenantName",a->auth.tenantName);r.set("enterpriseUsage",Json::object());r.set("fingerprint",fingerprint);if(str(r,"name").empty())r.set("name",a->nickname);else a->nickname=str(r,"name");if(existing<0||src=="web")r.set("acquired",Json((int64_t)time(nullptr)));r.set("credits",Json(-1));r.set("creditTime",Json(0));r.set("creditError","");writeAccount(*a);
+        if(!r.find("autoCheckin"))r.set("autoCheckin",Json(autoCheckinEnabled(r)));
         if(existing>=0)next["rows"][existing]=r;else next["rows"].push_back(r);
         if(str(registry,"active")==id){if(!AccountPool::instance().replaceActive(a,[&]{commit(next);})){error="Account is busy; saved credentials will be used on restart";return false;}ModelCatalog::instance().requestRefresh();}else commit(next);return true;
     }catch(const std::exception&e){error=e.what();return false;}
@@ -88,7 +109,7 @@ std::string source(){std::lock_guard lock(guard);return str(registry,"source");}
 std::string message(){std::lock_guard lock(guard);auto login=webLogin::message();return login.empty()?notice:login;}
 bool busy(){return refreshing||webLogin::busy();}
 std::vector<CredentialRow> rows(){std::lock_guard lock(guard);std::vector<CredentialRow>out;auto accounts=AccountPool::instance().accounts();
-    for(size_t i=0;i<registry["rows"].size();++i){auto&r=registry["rows"][i];if(str(r,"source")!=str(registry,"source"))continue;CredentialRow v;v.id=str(r,"id");v.name=str(r,"name");v.enterprise=str(r,"accountType")=="saas";v.tenantName=str(r,"tenantName");v.enterpriseUsage=r.get("enterpriseUsage",Json::object());v.source=str(r,"source");v.acquired=r.get("acquired",Json(0)).asInt();v.credits=r.get("credits",Json(-1)).asDouble(-1);v.creditTime=r.get("creditTime",Json(0)).asInt();v.creditError=str(r,"creditError");v.enabled=str(registry,"active")==v.id&&!accounts.empty();if(v.enabled){v.enterprise=accounts.front()->auth.isSaas();v.tenantName=accounts.front()->auth.tenantName;v.enterpriseUsage=saas::usage(*accounts.front());v.credits=accounts.front()->credits.load();if(accounts.front()->creditsCheckedAt.load()>v.creditTime){v.creditTime=accounts.front()->creditsCheckedAt.load();v.creditError.clear();}}out.push_back(v);}return out;
+    for(size_t i=0;i<registry["rows"].size();++i){auto&r=registry["rows"][i];if(str(r,"source")!=str(registry,"source"))continue;CredentialRow v;v.id=str(r,"id");v.name=str(r,"name");v.enterprise=str(r,"accountType")=="saas";v.autoCheckin=autoCheckinEnabled(r);v.checkinDay=r.get("checkinDay",Json(0)).asInt();v.checkinResult=(int)r.get("checkinResult",Json(2)).asInt();v.tenantName=str(r,"tenantName");v.enterpriseUsage=r.get("enterpriseUsage",Json::object());v.source=str(r,"source");v.acquired=r.get("acquired",Json(0)).asInt();v.credits=r.get("credits",Json(-1)).asDouble(-1);v.creditTime=r.get("creditTime",Json(0)).asInt();v.creditError=str(r,"creditError");v.enabled=str(registry,"active")==v.id&&!accounts.empty();if(v.enabled){v.enterprise=accounts.front()->auth.isSaas();v.tenantName=accounts.front()->auth.tenantName;v.enterpriseUsage=saas::usage(*accounts.front());v.credits=accounts.front()->credits.load();if(accounts.front()->creditsCheckedAt.load()>v.creditTime){v.creditTime=accounts.front()->creditsCheckedAt.load();v.creditError.clear();}}out.push_back(v);}return out;
 }
 bool discover(std::string& error){std::lock_guard lock(guard);if(str(registry,"source")!="default"){error="请先选择默认目录来源";return false;}bool any=false;
     for(auto&ed:Storage::discoverEditions()){auto a=std::make_shared<Account>();if(!Storage::readAuth(ed.userDir,a->auth,error))continue;a->machineId=Storage::readMachineId(ed.userDir);a->deviceId=Storage::readAhaDeviceId(ed.userDir);if(a->deviceId.empty())a->deviceId=Storage::readDeviceId(ed.userDir);if(a->deviceId.empty())a->deviceId=a->machineId;a->editionId=ed.id;a->nickname="Trae-"+a->auth.userId.substr(a->auth.userId.size()>4?a->auth.userId.size()-4:0);if(!add(a,"default",error))return false;any=true;}
@@ -105,9 +126,115 @@ bool refreshWeb(AuthData& auth,std::string& error){return webLogin::refresh(auth
 void refreshAll(){if(refreshing.exchange(true))return;try{auto list=rows();for(auto&r:list){std::shared_ptr<Account>a;{std::lock_guard lock(guard);int i=find(r.id);if(i<0)continue;auto active=AccountPool::instance().accounts();if(!active.empty()&&active.front()->auth.credentialId==r.id)a=active.front();else a=load(registry["rows"][i]);}
         auto before = a->creditsUpdated.load();
         AccountPool::instance().refreshCredits(a.get());{std::lock_guard lock(guard);int i=find(r.id);if(i>=0){auto next=registry;auto&row=next["rows"][i];row.set("credits",Json(a->credits.load()));row.set("accountType",a->auth.isSaas()?"saas":"personal");row.set("tenantName",a->auth.tenantName);row.set("enterpriseUsage",saas::usage(*a));if(a->creditsUpdated.load()>before)row.set("creditTime",Json((int64_t)time(nullptr)));row.set("creditError",a->creditsUpdated.load()==before?"刷新失败":"");commit(next);}}}
-        std::lock_guard lock(guard);notice="用量刷新完成";
+        std::lock_guard lock(guard);notice.clear();
     }catch(const std::exception&e){std::lock_guard lock(guard);notice=e.what();}refreshing=false;
 }
-bool startLogin(std::string& error){if(source()!="web"){error="请先选择网页登录凭据";return false;}return webLogin::start([](std::shared_ptr<Account>a,std::string&e){return add(a,"web",e);},error);}
+bool startLogin(std::string& error){if(refreshing.load()){error="Account task in progress; retry shortly";return false;}if(source()!="web"){error="请先选择网页登录凭据";return false;}return webLogin::start([](std::shared_ptr<Account>a,std::string&e){return add(a,"web",e);},error);}
 void stopLogin(){webLogin::stop();}
+
+long long checkinDay() {
+    time_t now = time(nullptr);
+    tm local{};
+    if (localtime_s(&local, &now) != 0) return -1;
+    return (local.tm_year + 1900LL) * 10000 + (local.tm_mon + 1) * 100 + local.tm_mday;
+}
+
+bool setAutoCheckin(const std::string& id, bool enabled, std::string& error) {
+    std::lock_guard lock(guard);
+    try {
+        int i = find(id);
+        if (i < 0) throw std::runtime_error("账号已删除");
+        auto account = load(registry["rows"][i]);
+        if (str(registry["rows"][i],"source") != "web" || account->auth.isSaas())
+            throw std::runtime_error("每日自动签到仅适用于网页登录的个人账号");
+        auto next = registry;
+        next["rows"][i].set("autoCheckin",Json(enabled));
+        commit(next);
+        return true;
+    } catch (const std::exception& e) { error = e.what(); return false; }
+}
+
+bool hasDueCheckin(long long day, long long now) {
+    if (day < 0 || busy()) return false;
+    std::lock_guard lock(guard);
+    if (!healthy) return false;
+    for (size_t i = 0; i < registry["rows"].size(); ++i)
+        if (checkinDue(registry["rows"][i],day,now)) return true;
+    return false;
+}
+
+int savedCheckinResult(const std::string& id, long long day) {
+    std::lock_guard lock(guard);
+    int i = find(id);
+    if (i < 0 || registry["rows"][i].get("checkinDay",Json(0)).asInt() != day) return 2;
+    return (int)registry["rows"][i].get("checkinResult",Json(2)).asInt();
+}
+
+void saveCheckinResult(const Account& account, long long day, int result) {
+    std::lock_guard lock(guard);
+    int i = find(account.auth.credentialId);
+    if (i < 0 || str(registry["rows"][i],"generation") != account.auth.credentialGeneration) return;
+    auto next = registry;
+    auto& row = next["rows"][i];
+    row.set("checkinDay",Json(day));
+    row.set("checkinResult",Json(result));
+    row.set("checkinRetryAt",Json((int64_t)time(nullptr) + 15 * 60));
+    if (account.creditsCheckedAt.load() > 0) {
+        row.set("credits",Json(account.credits.load()));
+        row.set("creditTime",Json(account.creditsCheckedAt.load()));
+        row.set("creditError","");
+    }
+    commit(next);
+}
+
+void runAutoCheckins(std::stop_token stop) {
+    // 与列表的批量刷新互斥，避免同一非活动账号的两个副本同时轮换 refresh token。
+    if (webLogin::busy() || refreshing.exchange(true)) return;
+    struct Reset { ~Reset() { refreshing = false; } } reset;
+    std::vector<std::string> ids;
+    {
+        std::lock_guard lock(guard);
+        for (size_t i = 0; i < registry["rows"].size(); ++i)
+            if (checkinDue(registry["rows"][i],checkinDay(),time(nullptr)))
+                ids.push_back(str(registry["rows"][i],"id"));
+    }
+    std::map<std::string,int> results;
+    for (const auto& id : ids) {
+        if (stop.stop_requested()) break;
+        std::shared_ptr<Account> account;
+        const auto day = checkinDay();
+        try {
+            {
+                std::lock_guard lock(guard);
+                int i = find(id);
+                if (i < 0 || !checkinDue(registry["rows"][i],day,time(nullptr))) continue;
+                auto active = AccountPool::instance().accounts();
+                if (!active.empty() && active.front()->auth.credentialId == id) account = active.front();
+                else account = load(registry["rows"][i]);
+            }
+            if (account->auth.isSaas() || account->auth.userId.empty()) {
+                saveCheckinResult(*account,day,-1);
+                continue;
+            }
+            const auto key = account->editionId + ":" + account->auth.userId;
+            const auto prior = results.find(key);
+            int result = prior == results.end() ? AccountPool::instance().doCheckin(*account) : prior->second;
+            if (prior != results.end() && result >= 0)
+                AccountPool::instance().refreshCredits(account.get());
+            results[key] = result;
+            saveCheckinResult(*account,day,result);
+        } catch (const std::exception& e) {
+            LOG_W("自动签到失败: %s", e.what());
+            // 单个账号失效不阻塞其他账号；持久化失败也要阻止每秒重新发起。
+            std::lock_guard lock(guard);
+            int i = find(id);
+            if (i >= 0) {
+                registry["rows"][i].set("checkinDay",Json(day));
+                registry["rows"][i].set("checkinResult",Json(-1));
+                registry["rows"][i].set("checkinRetryAt",Json((int64_t)time(nullptr) + 15 * 60));
+                try { commit(registry); } catch (...) {}
+            }
+        }
+    }
+}
 }

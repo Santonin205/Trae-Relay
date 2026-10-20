@@ -84,7 +84,6 @@ private:
     bool trayTipShown_ = false;
     std::atomic<bool> checkinRunning_{ false };
     std::atomic<bool> creditsRunning_{ false };
-    std::atomic<long long> lastAutoCheckinDay_{ -1 };
     // 主线程维护，结果绑定发起签到时的账号和日期，避免刷新或切号串用。
     std::weak_ptr<Account> checkinAccount_;
     long long checkinDay_ = -1;

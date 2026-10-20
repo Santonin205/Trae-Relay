@@ -46,6 +46,7 @@ inline constexpr int IDC_CRED_PREV = 1505, IDC_CRED_NEXT = 1506;
 inline constexpr int IDC_CRED_SLOT0 = 1510;
 inline constexpr int IDC_CRED_NAME = 3000, IDC_CRED_ENABLE = 3100, IDC_CRED_DELETE = 3200;
 inline constexpr int CRED_PAGE_SIZE = 4;
+inline constexpr int IDC_CRED_AUTOCHECKIN = 3300;
 enum PageIndex { PAGE_STATUS = 0, PAGE_USAGE, PAGE_SETTINGS, PAGE_CREDENTIALS };
 
 // ===== 控件描述表 =====

@@ -11,6 +11,16 @@
 namespace ui {
 using namespace visual;
 
+namespace {
+void releaseCredentialNameFocus(HWND page, HWND target) {
+    HWND focused = GetFocus();
+    if (!focused || !page || GetParent(focused) != page) return;
+    const int id = GetDlgCtrlID(focused);
+    if (id >= IDC_CRED_NAME && id < IDC_CRED_NAME + CRED_PAGE_SIZE)
+        SetFocus(target); // 触发已有 EN_KILLFOCUS 保存名称并移除编辑光标。
+}
+}
+
 LRESULT WindowController::handlePageMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     int page = GetDlgCtrlID(hwnd) - kPageControlBase;
     switch (msg) {
@@ -29,6 +39,10 @@ LRESULT WindowController::handlePageMessage(HWND hwnd, UINT msg, WPARAM wp, LPAR
         return 0;
     }
     case WM_LBUTTONDOWN: {
+        if (page == PAGE_CREDENTIALS) {
+            releaseCredentialNameFocus(hwnd, hwnd);
+            return 0;
+        }
         if (page != PAGE_USAGE) break;
         const auto bar = usageScrollbar(logicalWidth(hwnd), logicalHeight(hwnd),
             static_cast<int>(usageRows_.size()), usageScroll_);
@@ -95,6 +109,10 @@ LRESULT WindowController::handlePageMessage(HWND hwnd, UINT msg, WPARAM wp, LPAR
 LRESULT WindowController::handleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto& cfg = Config::instance();
     switch (msg) {
+    case WM_LBUTTONDOWN:
+    case WM_NCLBUTTONDOWN:
+        releaseCredentialNameFocus(pageCredentials_, hwnd);
+        break;
     case WM_CREATE: {
         hwnd_ = hwnd;
         // 快照模式：窗口只作渲染宿主，初始化由 runSnapshot 显式执行，
@@ -308,13 +326,12 @@ LRESULT WindowController::handleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         return 0;
     case WM_APP_CHECKIN_DONE: {
         checkinRunning_ = false;
+        if (lp == 1) {
+            if (uiCreated_) { refreshCredentialsPage(); refreshStatusPage(hwnd); }
+            return 0;
+        }
         int result = static_cast<int>(static_cast<INT_PTR>(wp));
         checkinResult_ = result;
-        const auto today = checkinLocalDay();
-        const auto accounts = AccountPool::instance().accounts();
-        if (result >= 0 && today >= 0 && checkinDay_ == today &&
-            !accounts.empty() && checkinAccount_.lock() == accounts.front())
-            lastAutoCheckinDay_.store(today);
         if (uiCreated_) refreshStatusPage(hwnd);
         return 0;
     }

@@ -10,11 +10,7 @@ Windows 原生的 Trae 本地 API 转接工具，支持通过网页登录或读�
 
 ### 运行总览
 
-![Trae Relay 运行总览](docs/images/%E9%A2%84%E8%A7%88.png)
-
-### 凭据管理
-
-![Trae Relay 凭据管理](docs/images/%E5%87%AD%E6%8D%AE%E7%AE%A1%E7%90%86%E9%A2%84%E8%A7%88.png)
+![Trae Relay 运行总览](docs/images/%E4%B8%BB%E9%A1%B5%E9%9D%A2%E9%A2%84%E8%A7%88.png)
 
 ## 功能
 
@@ -60,6 +56,8 @@ Windows 原生的 Trae 本地 API 转接工具，支持通过网页登录或读�
 
 账号列表中的“每日自动签到”可为每个个人账号单独设置，默认开启，手动关闭后会保留选择。偏好设置中的自动签到总开关和时间统一生效：程序运行期间，到达设定时间后依次处理已开启的账号，无需将它们启用为当前使用账号。当天过了设定时间再开启账号，也会补签；成功记录和开关会保存，重启不会重复领取。普通失败间隔 15 分钟重试，企业账号不参与。关闭窗口到托盘仍可执行，退出程序后不会执行。
 
+![Trae Relay 凭据管理](docs/images/%E5%87%AD%E6%8D%AE%E7%AE%A1%E7%90%86%E9%A2%84%E8%A7%88.png)
+
 ### 企业 SaaS 账号
 
 点击同一个“网页登录”按钮，在官方页面选择“企业账号登录”。授权后自动识别企业身份，保存企业名称、企业 ID 和凭据；启用后使用企业服务获取模型和处理请求。当前适配国内公共 SaaS（`console.enterprise.trae.cn`），不支持 VPC 或私有部署。
@@ -73,6 +71,12 @@ Windows 原生的 Trae 本地 API 转接工具，支持通过网页登录或读�
 健康检查：`GET http://127.0.0.1:8317/health`，无需密钥。
 
 API 支持 `Authorization: Bearer <key>` 和 `X-API-Key: <key>`。开启“任意 Key”会跳过鉴权，局域网使用时不建议开启。
+
+## 使用记录
+
+可查看每次请求使用的模型、输入/输出 Token、缓存命中和个人账号的积分消耗。
+
+![Trae Relay 使用记录](docs/images/%E4%BD%BF%E7%94%A8%E8%AE%B0%E5%BD%95%E9%A2%84%E8%A7%88.png)
 
 ## API
 
@@ -154,7 +158,7 @@ cmake --build build --config Release --parallel 4
 ```text
 src/                    C++ 源码、资源和版本模板
 include/                头文件
-docs/images/            运行总览与凭据管理截图
+docs/images/            界面预览截图与赞赏码
 CMakeLists.txt          CMake 构建配置
 README.md               项目说明
 ```
@@ -182,4 +186,9 @@ README.md               项目说明
 | `responses_sessions.json` | 开启持久化后的会话缓存 |
 
 登录凭据使用 Windows DPAPI 加密，绑定保存时的 Windows 用户。更换电脑或 Windows 用户后，请重新登录。
+
+## 支持作者
+
+
+<img src="docs/images/%E8%B5%9E%E8%B5%8F%E7%A0%81.png" alt="赞赏码" width="240" />
 

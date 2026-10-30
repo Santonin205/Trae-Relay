@@ -93,7 +93,7 @@ struct WinHttpCtx {
     }
 
     bool open(const std::string& method, const std::string& url, const Headers& hdrs,
-              const std::string& body, int connectTimeoutMs) {
+              const std::string& body, int connectTimeoutMs, bool useRequestTimeouts = false) {
         std::string scheme, host, path;
         int port;
         if (!parseUrl(url, scheme, host, port, path)) {
@@ -103,7 +103,15 @@ struct WinHttpCtx {
         hSession = WinHttpOpen(L"TraeRelay/" TRAERELAY_VERSION_W, WINHTTP_ACCESS_TYPE_NO_PROXY,
                                WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
         if (!hSession) { err = networkError("初始化", GetLastError()); return false; }
-        WinHttpSetTimeouts(hSession, 15000, 15000, 30000, 60000);
+        // 同步短请求必须在发送/等响应头前应用超时，不能沿用流式默认值。
+        if (!WinHttpSetTimeouts(hSession,
+                useRequestTimeouts ? connectTimeoutMs : 15000,
+                useRequestTimeouts ? connectTimeoutMs : 15000,
+                useRequestTimeouts ? firstTimeoutMs : 30000,
+                useRequestTimeouts ? firstTimeoutMs : 60000)) {
+            err = networkError("设置请求超时", GetLastError());
+            return false;
+        }
         hConnect = WinHttpConnect(hSession, toWide(host).c_str(), (INTERNET_PORT)port, 0);
         if (!hConnect) { err = networkError("建立连接", GetLastError()); return false; }
         DWORD flags = scheme == "https" ? WINHTTP_FLAG_SECURE : 0;
@@ -111,7 +119,14 @@ struct WinHttpCtx {
                                       nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                       flags);
         if (!hRequest) { err = networkError("创建请求", GetLastError()); return false; }
-        (void)connectTimeoutMs;
+        if (useRequestTimeouts && firstTimeoutMs > 0) {
+            DWORD responseTimeout = (DWORD)firstTimeoutMs;
+            if (!WinHttpSetOption(hRequest, WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT,
+                                  &responseTimeout, sizeof(responseTimeout))) {
+                err = networkError("设置响应头超时", GetLastError());
+                return false;
+            }
+        }
         // 请求头
         std::string hd;
         bool hasCL = false;
@@ -231,7 +246,7 @@ Response send(const std::string& method, const std::string& url,
     WinHttpCtx ctx;
     ctx.firstTimeoutMs = timeoutMs;
     ctx.readTimeoutMs = timeoutMs;
-    if (!ctx.open(method, url, headers, body, connectTimeoutMs)) {
+    if (!ctx.open(method, url, headers, body, connectTimeoutMs, true)) {
         resp.error = ctx.err;
         resp.status = ctx.status;
         return resp;
@@ -244,9 +259,8 @@ Response send(const std::string& method, const std::string& url,
         ctx.plainBuf.clear();
         if (resp.body.size() > 512ULL * 1024 * 1024) break;
     }
-    if (!resp.body.empty() || ctx.eof) {
-        // 正常读完或 EOF
-    } else if (!ctx.err.empty()) {
+    // pump 失败也会置 eof；即使已收到部分正文，仍须保留超时/读取错误。
+    if (!ctx.err.empty()) {
         resp.error = ctx.err;
     }
     ctx.closeAll();

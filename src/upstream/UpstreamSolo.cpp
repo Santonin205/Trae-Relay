@@ -5,9 +5,100 @@
 #include "common/Log.h"
 #include "common/Settings.h"
 #include "common/SseParser.h"
+#include <chrono>
+#include <exception>
 #include <map>
+#include <thread>
 
 static const char* kSoloHost = "https://trae-api-cn.mchost.guru";
+
+// 每个请求使用独立会话，计费接口的会话汇总才能直接归属本次请求。
+static bool readUsageTokens(const Json& object, const char* key, long long& value) {
+    const Json* field = object.find(key);
+    if (!field || !field->isInt() || field->asInt(-1) < 0) return false;
+    value = field->asInt();
+    return true;
+}
+
+static bool applySessionCacheUsage(const Json& response, const std::string& sessionId,
+                                   Json& usage, std::string& reason) {
+    const Json* session = response.find("user_usage_group_by_session");
+    if (!session || !session->isObject() ||
+        session->get("session_id", Json("")).asString() != sessionId) {
+        reason = "会话记录尚未落账或会话 ID 不匹配";
+        return false;
+    }
+    const Json* extra = session->find("extra_info");
+    long long input = 0, output = 0, cached = 0;
+    if (!extra || !extra->isObject() ||
+        !readUsageTokens(*extra, "input_token", input) ||
+        !readUsageTokens(*extra, "output_token", output) ||
+        !readUsageTokens(*extra, "cache_read_token", cached) ||
+        input <= 0 || cached > input) {
+        reason = "计费用量为空或缓存计数无效";
+        return false;
+    }
+    long long prompt = 0, completion = 0;
+    if (!readUsageTokens(usage, "prompt_tokens", prompt) ||
+        !readUsageTokens(usage, "completion_tokens", completion) ||
+        input != prompt || output != completion) {
+        reason = "计费用量与本次 SSE 用量不一致";
+        return false;
+    }
+    Json details = usage.get("prompt_tokens_details", Json::object());
+    if (!details.isObject()) details = Json::object();
+    details.set("cached_tokens", Json(cached));
+    // 保留 SSE 的其余细分字段；cache_write_token=0 不代表没有建立缓存。
+    usage.set("prompt_tokens_details", std::move(details));
+    return true;
+}
+
+static void enrichSessionCacheUsage(const std::string& sessionId, http::Headers headers,
+                                    Json& usage) {
+    // 落账可能晚于 done：最多查三次，间隔 200/400ms，每阶段超时 800ms。
+    // 总重试窗口到期后不再发起新请求；请求本身由 WinHTTP 短超时收束。
+    constexpr int kAttempts = 3;
+    constexpr int kTimeoutMs = 800;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2500);
+    Json body = Json::object();
+    body.set("session_id", Json(sessionId));
+    headers.set("Accept", "application/json");
+    std::string reason = "补查窗口已到期";
+    int attempts = 0;
+    for (int i = 0; i < kAttempts; ++i) {
+        if (i > 0) {
+            const auto delay = std::chrono::milliseconds(200 * i);
+            if (std::chrono::steady_clock::now() + delay >= deadline) break;
+            std::this_thread::sleep_for(delay);
+        }
+        if (std::chrono::steady_clock::now() >= deadline) break;
+        headers.set("x-request-id", crypto::genUuid());
+        ++attempts;
+        auto response = http::send("POST",
+            std::string(kSoloHost) + "/api/v1/commercial/get_session_usage",
+            headers, body.dump(), kTimeoutMs, kTimeoutMs);
+        if (!response.ok()) {
+            reason = response.error.empty() ? "HTTP " + std::to_string(response.status) : response.error;
+            // 鉴权/参数失败不重试，更不能把计费失败升级成聊天失败。
+            if (response.status >= 400 && response.status < 500 &&
+                response.status != 408 && response.status != 429) break;
+            continue;
+        }
+        Json data;
+        if (!Json::parse(response.body, data) || !data.isObject()) {
+            reason = "计费接口返回无效 JSON";
+            continue;
+        }
+        if (applySessionCacheUsage(data, sessionId, usage, reason)) {
+            LOG_I("缓存用量回填：session=%s cached=%lld attempts=%d", sessionId.c_str(),
+                  usage.get("prompt_tokens_details", Json::object())
+                       .get("cached_tokens", Json(0)).asInt(), attempts);
+            return;
+        }
+    }
+    LOG_W("缓存用量补查失败，保留 SSE 用量：session=%s attempts=%d reason=%s",
+          sessionId.c_str(), attempts, reason.c_str());
+}
 
 // 历史/客户端文本中若残留 opencode 原生标签，上游会将其识别为自己的工具
 // 协议并在输出中途挂起。统一改写为中性标签后再上行。
@@ -89,12 +180,13 @@ UpResult upstreamSolo(const UpRequest& req, Account& acc, const ModelCaps& caps,
     auto cfg = settings::get();
     std::string configName = caps.configName.empty() ? req.model : caps.configName;
 
+    bool personalAccount;
+    { std::lock_guard lock(acc.refreshMtx); personalAccount = !acc.auth.isSaas(); }
+    const std::string sessionId = crypto::genUuid();
     Json body = Json::object();
-    if (acc.auth.isSaas()) {
-        // SaaS validates conversation identity; the public personal gateway accepts its absence.
-        body.set("session_id", crypto::genUuid());
-        body.set("conversation_id", crypto::genUuid());
-    }
+    body.set("session_id", Json(sessionId));
+    // 个人账号按请求隔离计费归属；企业账号保持原有双 UUID 行为。
+    body.set("conversation_id", Json(personalAccount ? sessionId : crypto::genUuid()));
     Json messages = Json::array();
     // 工具调用走上游原生 function calling（body.tools），不再注入文本协议
     for (const auto& m : req.messages) {
@@ -407,5 +499,15 @@ UpResult upstreamSolo(const UpRequest& req, Account& acc, const ModelCaps& caps,
     }
     r.ok = true;
     r.model = configName;
+    stream->close();
+    if (personalAccount) {
+        try {
+            // 沿用本次上游请求的账号鉴权，在两种 API 最终 usage/使用记录之前补齐。
+            enrichSessionCacheUsage(sessionId, hd, r.usage);
+        } catch (const std::exception& e) {
+            LOG_W("缓存用量补查异常，保留 SSE 用量：session=%s reason=%s",
+                  sessionId.c_str(), e.what());
+        }
+    }
     return r;
 }

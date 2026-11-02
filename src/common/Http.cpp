@@ -103,6 +103,13 @@ struct WinHttpCtx {
         hSession = WinHttpOpen(L"TraeRelay/" TRAERELAY_VERSION_W, WINHTTP_ACCESS_TYPE_NO_PROXY,
                                WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
         if (!hSession) { err = networkError("初始化", GetLastError()); return false; }
+        // IPv6 连接不通时，快速回退到 IPv4。
+        BOOL fastFallback = TRUE;
+        if (!WinHttpSetOption(hSession, WINHTTP_OPTION_IPV6_FAST_FALLBACK,
+                             &fastFallback, sizeof(fastFallback))) {
+            err = networkError("启用 IPv6 快速回退", GetLastError());
+            return false;
+        }
         // 同步短请求必须在发送/等响应头前应用超时，不能沿用流式默认值。
         if (!WinHttpSetTimeouts(hSession,
                 useRequestTimeouts ? connectTimeoutMs : 15000,

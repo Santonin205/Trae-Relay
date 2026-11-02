@@ -175,34 +175,71 @@ static void appendSoloChatMessage(Json& messages, const std::string& role, const
     messages.push_back(msg);
 }
 
-UpResult upstreamSolo(const UpRequest& req, Account& acc, const ModelCaps& caps, const UpSink& sink) {
-    UpResult r;
-    auto cfg = settings::get();
-    std::string configName = caps.configName.empty() ? req.model : caps.configName;
-
-    bool personalAccount;
-    { std::lock_guard lock(acc.refreshMtx); personalAccount = !acc.auth.isSaas(); }
-    const std::string sessionId = crypto::genUuid();
-    Json body = Json::object();
-    body.set("session_id", Json(sessionId));
-    // 个人账号按请求隔离计费归属；企业账号保持原有双 UUID 行为。
-    body.set("conversation_id", Json(personalAccount ? sessionId : crypto::genUuid()));
+// 只转换本次上行消息，不修改原始消息或 Responses 会话缓存。
+static Json soloMessages(const std::vector<ChatMessage>& input) {
     Json messages = Json::array();
+    std::vector<Json> pendingImages;
+    std::map<std::string, std::string> toolNames;
+    auto flushImages = [&] {
+        for (auto& image : pendingImages) messages.push_back(std::move(image));
+        pendingImages.clear();
+    };
     // 工具调用走上游原生 function calling（body.tools），不再注入文本协议
-    for (const auto& m : req.messages) {
+    for (const auto& m : input) {
         std::string role = m.role == "developer" ? "system" : m.role;
+        // 同一轮并行工具的结果全部发完，再补图片，保持调用/结果连续配对。
+        if (role != "tool") flushImages();
         if (role == "tool") {
             // 原生 function calling 结果：role=tool + tool_call_id 关联；
             // 文本同样过标签消毒（工具输出里可能包含协议标签源码）。
+            const std::string callId = m.toolCallId.empty() ? "unknown" : m.toolCallId;
+            Json content = soloContent(m);
+            Json text = Json::array();
+            Json images = Json::array();
+            for (size_t i = 0; i < content.size(); ++i) {
+                const Json& part = content.at(i);
+                if (part.get("type", Json("")).asString() == "image_url")
+                    images.push_back(part);
+                else
+                    text.push_back(part);
+            }
+            if (!images.empty()) {
+                // llm_utils_chat 不向模型传递 tool.content 中的图片；
+                // 改用用户图片消息承载，并明确其工具来源，避免当作用户新指令。
+                const auto name = toolNames.find(m.toolCallId);
+                Json source = Json::object();
+                source.set("tool_call_id", Json(callId));
+                source.set("tool_name", Json(!m.toolName.empty() ? m.toolName :
+                    (name != toolNames.end() ? name->second : "")));
+                std::string label = "Tool result image: " + source.dump();
+                sanitizeToolTags(label);
+                Json parts = Json::array();
+                Json marker = Json::object();
+                marker.set("type", Json("text"));
+                marker.set("text", Json(label));
+                parts.push_back(marker);
+                for (size_t i = 0; i < images.size(); ++i) parts.push_back(images.at(i));
+                Json imageMessage = Json::object();
+                imageMessage.set("role", Json("user"));
+                imageMessage.set("content", std::move(parts));
+                pendingImages.push_back(std::move(imageMessage));
+                if (text.empty()) {
+                    Json notice = Json::object();
+                    notice.set("type", Json("text"));
+                    notice.set("text", Json("Images follow."));
+                    text.push_back(notice);
+                }
+            }
             Json msg = Json::object();
             msg.set("role", Json("tool"));
-            msg.set("tool_call_id", Json(m.toolCallId.empty() ? "unknown" : m.toolCallId));
+            msg.set("tool_call_id", Json(callId));
             if (!m.toolName.empty()) msg.set("name", Json(m.toolName));
-            msg.set("content", soloContent(m));
+            msg.set("content", std::move(text));
             messages.push_back(msg);
             continue;
         }
         if (role == "assistant" && !m.toolCalls.empty()) {
+            toolNames.clear();
             // 原生 function calling 历史：tool_calls 数组，函数体键名为
             // 上游要求的 function_call；name 为空的条目剔除（必填校验）。
             Json msg = Json::object();
@@ -211,6 +248,7 @@ UpResult upstreamSolo(const UpRequest& req, Account& acc, const ModelCaps& caps,
             Json tcs = Json::array();
             for (const auto& tc : m.toolCalls) {
                 if (tc.name.empty()) continue;
+                toolNames[tc.id] = tc.name;
                 Json fc = Json::object();
                 fc.set("name", Json(tc.name));
                 fc.set("arguments", Json(tc.arguments.empty() ? "{}" : tc.arguments));
@@ -230,8 +268,24 @@ UpResult upstreamSolo(const UpRequest& req, Account& acc, const ModelCaps& caps,
         }
         appendSoloChatMessage(messages, role, m);
     }
+    flushImages();
     if (messages.empty()) appendSoloText(messages, "user", "");
-    body.set("messages", messages);
+    return messages;
+}
+
+UpResult upstreamSolo(const UpRequest& req, Account& acc, const ModelCaps& caps, const UpSink& sink) {
+    UpResult r;
+    auto cfg = settings::get();
+    std::string configName = caps.configName.empty() ? req.model : caps.configName;
+
+    bool personalAccount;
+    { std::lock_guard lock(acc.refreshMtx); personalAccount = !acc.auth.isSaas(); }
+    const std::string sessionId = crypto::genUuid();
+    Json body = Json::object();
+    body.set("session_id", Json(sessionId));
+    // 个人账号按请求隔离计费归属；企业账号保持原有双 UUID 行为。
+    body.set("conversation_id", Json(personalAccount ? sessionId : crypto::genUuid()));
+    body.set("messages", soloMessages(req.messages));
     // 模型目录只保留 get_detail_param 的 IDE 主目录档案，function 固定
     // chat_v3 / solo_agent，不再有 solo_work_lite / builder_v3 回退。
     bool ideChat = caps.ideChatCapable;
